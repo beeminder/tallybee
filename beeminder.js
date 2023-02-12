@@ -101,7 +101,7 @@ async function getGoals() {
   const r = await sendBeeminderUrl(`users/${getUsername()}.json`);
   if (r.status !== 200) {
     console.log("DEBUG 3: non 200", r)
-    return {error: "Non-200 response from "}
+    return {error: "Non-200 response from beeminder.", body: r.body}
   }
   else {
     const userJ = await r.json();
