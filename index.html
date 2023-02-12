@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" 
+  href="https://tallybee.dreev.repl.co/tallybee.png" />
+<title>TallyBee</title>
+<!-- <link rel="stylesheet" href="https://latex.now.sh/style.css"> -->
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class='versiontag'>v2023.01.21a&nbsp;</div>
+<div id="bigbut">
+0
+</div>
+
+<div class="footer">
+<button id="undobut">UNDO</button> &nbsp;
+Send <span id="num">0</span> to 
+<label for="goals"></label>
+<select name="goals" id="goals">
+</select>
+<button id="subbut">Submit</button>
+<button id="infobut">Background</button>
+
+<div id="myModal" class="modal">
+<div class="modal-content">
+<div class="modal-header">
+  <span class="close">&times;</span>
+  <h2>TallyBee</h2>
+</div>
+<div class="modal-body">
+<p>
+This replicates the tally counter feature of Beedroid.
+Just tap/click your screen to keep count of something.
+Our favorite use case: put your phone on the floor and count pushups by touching your nose to the screen.
+</p>
+<h2>Credits</h2>
+<p>
+The name “TallyBee” is from an Android app that Bethany made in, I don't know, 2008, like literally one of the first Android apps ever, at least percentage-wise?
+Anyway, it did this, minus the Beeminder integration.
+I guess it was handy for knitting?
+Then Uluc Saranli merged the functionality into Beedroid.
+Then Theo Spears pointed out that it wouldn't be too hard to create this as a standalone web app.
+Then Christopher Moravec whipped up some CSS and Javascript and others jumped in.
+Jake Coble added the coup de grace: actually sending the number to a Beeminder goal.
+</p>
+</div> <!-- modal-body -->
+<!--
+<div class="modal-footer">
+</div>
+-->
+</div> <!-- modal-content -->
+</div> <!-- modal -->
+</div> <!-- footer -->
+
+<h1>TallyBee</h1>
+
+<script>
+const modal = document.getElementById("myModal");
+const btn = document.getElementById("infobut");
+// Get the <span> element that closes the modal
+const span = document.getElementsByClassName("close")[0];
+// When the user clicks the button, open the modal 
+btn.onclick = function() { modal.style.display = "block" }
+// When the user clicks on <span> (x), close the modal
+span.onclick = function() { modal.style.display = "none" }
+// When the user clicks anywhere outside of the modal, close it
+window.onclick = function(event) {
+  if (event.target == modal) { modal.style.display = "none" }
+}
+</script>
+
+<script type="module">
+  import * as beeminder from './beeminder.js';
+  const clientId = "6qi9cv7g647fisgzlz0flxwee";
+  const redirectUri = "https://tallybee.dreev.repl.co/";
+  if (beeminder.autoLogin(clientId, redirectUri)) {
+    // safe to do things here b/c you are logged in.
+
+    // get list of goals
+    const goals = await beeminder.getGoals();
+    if (goals.error === undefined) {
+      const myGoalsUl = document.getElementById('goals');
+      for(const g in goals) {
+        const newItem = document.createElement("option");
+        newItem.setAttribute("value", goals[g]);
+        newItem.innerText = goals[g];
+        myGoalsUl.appendChild(newItem);
+      }
+    }
+    else {
+      console.log(goals)
+      beeminder.logout();
+      alert("Got invalid token result. Reload page to log in again.")
+    }
+  }
+</script>
+
+
+<script>
+// -----------------------------------------------------------------------------
+// Stick this Javascript at the end of your html and it will stick a warning at
+// the top of the page if it's loaded on an ancient browser that doesn't support
+// modern Javascript.
+function ancient_browser_check() {
+  "use strict"                         // does using "use strict" matter?
+  try { eval("let foo = (x)=>x+1") }   // feature detection: "let" & arrow funcs
+  catch (e) { return true }            // bad browser, not understanding ES6
+  return false                         // good browser, not being ancient
+}
+if (ancient_browser_check()) {
+  //document.body.insertAdjacentHTML('afterbegin', '<h1>' + s + '</h1>')
+  //  "<h1>Ancient browser warning: nothing's gonna work here!</h1>")
+  // That works but the following version miiight be safer for ancient browsers:
+  var body = document.body;
+  var x = document.createElement("h1");
+  x.innerHTML = "Ancient browser warning: nothing's gonna work here!";
+  body.insertBefore(x, body.firstChild);
+}
+// -----------------------------------------------------------------------------
+</script>
+
+<script type="module" src="script.js"/>
+<!--
+This script places a badge on your repl's full-browser view back to your repl's 
+cover page. Try various colors for the theme: dark, light, red, orange, yellow, 
+lime, green, teal, blue, blurple, magenta, pink!
+-->
+<script src="https://replit.com/public/js/replit-badge.js" theme="blue" defer>
+</script> 
+</body>
+</html>
