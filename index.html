@@ -1,33 +1,77 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="icon" 
-  href="tallybee.png" />
 <title>TallyBee</title>
 <!-- <link rel="stylesheet" href="https://latex.now.sh/style.css"> -->
 <link rel="stylesheet" href="style.css">
+<!-- Dark, for what the browser draws itself, like the page before style.css
+     loads, and the dropdown's list of goals -->
+<meta name="color-scheme" content="dark">
+<!-- Icons for browser tabs and home screens, and what makes TallyBee
+     installable as an app (see icons.sh) -->
+<link rel="icon" href="icon-192.png" type="image/png" sizes="192x192">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#000000">
+<!-- For search results and link previews. The description is the help text's
+     second and third sentences. -->
+<meta name="description" content="Just tap/click your screen to keep count of something. Our favorite use case: put your phone on the floor and count pushups by touching your nose to the screen.">
+<link rel="canonical" href="https://tallybee.beeminder.com/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tallybee.beeminder.com/">
+<meta property="og:title" content="TallyBee">
+<meta property="og:description" content="Just tap/click your screen to keep count of something. Our favorite use case: put your phone on the floor and count pushups by touching your nose to the screen.">
+<meta property="og:image" content="https://tallybee.beeminder.com/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="TallyBee">
+<meta name="twitter:card" content="summary_large_image">
 </head>
 <body>
-<div class='versiontag'>v2023.01.21a&nbsp;</div>
-<div id="bigbut">
-0
+<div class='versiontag'>v2026.09.30b&nbsp;</div>
+<div id="bigbut"><span id="count">0</span></div>
+<!-- While we wait on Beeminder, the infinibee (Beeminder's bee logo, from
+     beeminder.com/press) flies a lemniscate (a figure eight; see style.css) -->
+<div id="infinibee" hidden>
+<svg viewBox="-60 -25 120 50">
+<image href="infinibee.svg" x="-9" y="-9" width="18" height="18"/>
+</svg>
 </div>
 
 <div class="footer">
-<button id="undobut">UNDO</button> &nbsp;
-Send <span id="num">0</span> to 
-<label for="goals"></label>
-<select name="goals" id="goals">
-</select>
-<button id="subbut">Submit</button>
-<button id="infobut">Background</button>
+<!-- The status line comes first, so that a message, like the one Submit shows
+     at once, grows the footer up into the big button rather than moving a
+     control out from under the finger that just tapped it. Screen readers
+     read out each new message. -->
+<span id="status" role="status"></span>
+<div>
+<button id="undobut">UNDO</button>
+<!-- label for the button that zeroes the count without submitting it
+     (Beedroid's is "Clear") -->
+<button id="clearbut">Clear</button>
+<button id="infobut" aria-label="Help">?</button>
+</div>
+<div>
+<!-- "Send N to" is the dropdown's label: it grays out along with the dropdown,
+     and screen readers call the dropdown by it. The dropdown and Submit start
+     out grayed out, so that they never look usable before script.js runs. -->
+<label for="goals">Send <span id="num">0</span> to </label>
+<select name="goals" id="goals" disabled></select>
+<button id="subbut" disabled>Submit</button>
+</div>
+<div>
+<button id="loginbut"></button>
+<span id="safesum"></span>
+</div>
+</div> <!-- footer -->
 
-<div id="myModal" class="modal">
+<dialog id="info" aria-labelledby="infotitle">
 <div class="modal-content">
 <div class="modal-header">
-  <span class="close">&times;</span>
-  <h2>TallyBee</h2>
+  <form method="dialog"><button class="close" aria-label="Close">&times;</button></form>
+  <h2 id="infotitle">TallyBee</h2>
 </div>
 <div class="modal-body">
 <p>
@@ -46,57 +90,8 @@ Then Christopher Moravec whipped up some CSS and Javascript and others jumped in
 Jake Coble added the coup de grace: actually sending the number to a Beeminder goal.
 </p>
 </div> <!-- modal-body -->
-<!--
-<div class="modal-footer">
-</div>
--->
 </div> <!-- modal-content -->
-</div> <!-- modal -->
-</div> <!-- footer -->
-
-<h1>TallyBee</h1>
-
-<script>
-const modal = document.getElementById("myModal");
-const btn = document.getElementById("infobut");
-// Get the <span> element that closes the modal
-const span = document.getElementsByClassName("close")[0];
-// When the user clicks the button, open the modal 
-btn.onclick = function() { modal.style.display = "block" }
-// When the user clicks on <span> (x), close the modal
-span.onclick = function() { modal.style.display = "none" }
-// When the user clicks anywhere outside of the modal, close it
-window.onclick = function(event) {
-  if (event.target == modal) { modal.style.display = "none" }
-}
-</script>
-
-<script type="module">
-  import * as beeminder from './beeminder.js';
-  const clientId = "6qi9cv7g647fisgzlz0flxwee";
-  const redirectUri = "https://tallybee.beeminder.com/";
-  if (beeminder.autoLogin(clientId, redirectUri)) {
-    // safe to do things here b/c you are logged in.
-
-    // get list of goals
-    const goals = await beeminder.getGoals();
-    if (goals.error === undefined) {
-      const myGoalsUl = document.getElementById('goals');
-      for(const g in goals) {
-        const newItem = document.createElement("option");
-        newItem.setAttribute("value", goals[g]);
-        newItem.innerText = goals[g];
-        myGoalsUl.appendChild(newItem);
-      }
-    }
-    else {
-      //console.log(goals)
-      beeminder.logout();
-      alert("Got invalid token result. Reload page to log in again.")
-    }
-  }
-</script>
-
+</dialog>
 
 <script>
 // -----------------------------------------------------------------------------
@@ -121,13 +116,6 @@ if (ancient_browser_check()) {
 // -----------------------------------------------------------------------------
 </script>
 
-<script type="module" src="script.js"/>
-<!--
-This script places a badge on your repl's full-browser view back to your repl's 
-cover page. Try various colors for the theme: dark, light, red, orange, yellow, 
-lime, green, teal, blue, blurple, magenta, pink!
--->
-<script src="https://replit.com/public/js/replit-badge.js" theme="blue" defer>
-</script> 
+<script type="module" src="script.js"></script>
 </body>
 </html>

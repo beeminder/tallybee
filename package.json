@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test quals.js"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.63.0"
+  }
+}

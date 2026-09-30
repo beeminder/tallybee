@@ -1,15 +1,31 @@
 /*******************************************************************************
  ******************************************************************************/
 
+/* Colors. The yellow is the one in beeminder.com's header (#ffc107, the yellow
+   before, is Bootstrap's), a shade darker on hover and another when pressed.
+   The footer, its hairline, its buttons' fill (a shade lighter on hover), the
+   secondary text, and the green are Apple's dark-mode system colors, and the
+   text, the pressed fill, and the red are close to theirs. The blue is the old
+   pure blue (#0000ff) made lighter at the same hue (in OKLCH): pure blue on
+   black has a contrast of 2.4:1, short of the 3:1 that WCAG asks of even big
+   text, and this has 5.1:1. It colors the count and the ring that shows where
+   the keyboard's focus is. What's grayed out is at 38% opacity. */
 :root {
-  --footer-height: 70px;
+  --yellow: #ffcb06; /* Beeminder yellow */
+  --yellow-hover: #ebbb06;
+  --yellow-press: #d6ab05;
+  --surface: #1c1c1e;
+  --line: #38383a;
+  --fill: #3a3a3c;
+  --fill-hover: #48484a;
+  --fill-press: #58585c;
+  --text: #f2f2f7;
+  --text2: #98989f;
+  --blue: #3a73ff;
+  --green: #30d158;
+  --red: #ff453a;
+  --grayed: 0.38;
 }
-
-/* canvas {
-  position: absolute;
-  top:  0px;
-  left: 0px;
-} */
 
 html, body {
   margin: 0;
@@ -18,6 +34,31 @@ html, body {
   width: 100%;
   max-width: 100%;
   font-size: 22px; /* bump up from latex.css's default (but not using now) */
+}
+
+/* No enlarging of text by iPhones in landscape (100%, not none, which can keep
+   people from zooming) */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* The big button takes all the height the footer doesn't. The dynamic
+   viewport height (dvh) excludes phone browsers' address bars. */
+body {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  background-color: black;
+  touch-action: manipulation; /* no double-tap zooming */
+  font-family: system-ui, sans-serif; /* each device's own font */
+  -webkit-font-smoothing: antialiased; /* light-on-dark text as thin on Macs as on iPhones */
+  /* No tap highlights, the translucent boxes that phones flash over what's
+     tapped. Chrome on Android flashed one over the whole big button at every
+     tap, and draws them as rectangles, even over round buttons. The buttons
+     look pressed instead (see :active below), and for the big button, the
+     count changing is enough. */
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* Put the version in itty-bitty gray font in the bottom corner of the page */
@@ -36,94 +77,249 @@ html, body {
   -webkit-user-select: none; /* Safari */
   -ms-user-select: none; /* IE 10 and IE 11 */
   user-select: none; /* Standard syntax */
-  font-size: min(50em, 40vw);
-  color: blue;
-  text-align: center;
-  width: 100%;
-  height: 100%;
-  line-height: calc(100vh - var(--footer-height));
+  -webkit-touch-callout: none; /* no long-press menu on iPhones */
+  touch-action: none; /* touches are taps, never scrolling or zooming */
+  flex: 1;
+  display: grid;
+  place-items: center;
   overflow: hidden;
+  container-type: size; /* so the count's size can depend on the button's */
+  color: var(--blue);
   background-color: black;
-}
-
-#infobut { float: right; }
-
-.footer {
-  position: absolute;
-  bottom: 0;
-  width: 100%;
-  max-width: 800px;
-  height: var(--footer-height);
-  background-color: #f9f9f9;
-  text-align: center;
-  padding: 0px;
-}
-
-/* A so-called Bottom Modal from W3Schools; kinda broken on mobile */
-.modal {
-  display: none; /* Hidden by default */
-  position: fixed; /* Stay in place */
-  z-index: 1; /* Sit on top */
-  left: 0;
-  top: 0;
-  width: 100%; /* Full width */
-  height: 100%; /* Full height */
-  overflow: auto; /* Enable scroll if needed */
-  background-color: rgb(0,0,0); /* Fallback color */
-  background-color: rgba(0,0,0,0.4); /* Black w/ opacity */
-  -webkit-animation-name: fadeIn; /* Fade in the background */
-  -webkit-animation-duration: 0.4s;
-  animation-name: fadeIn;
-  animation-duration: 0.4s
-}
-.modal-content {
-  position: fixed;
-  bottom: 0;
-  background-color: #fefefe;
-  width: 100%;
-  -webkit-animation-name: slideIn;
-  -webkit-animation-duration: 0.4s;
-  animation-name: slideIn;
-  animation-duration: 0.4s
-}
-.close { /* the X in the upper right aka close button */
-  color: black;
-  float: right;
-  font-size: 28px;
-  font-weight: bold;
-}
-.close:hover,
-.close:focus {
-  color: #000;
-  text-decoration: none;
   cursor: pointer;
 }
-.modal-header {
-  padding: 2px 16px;
-  background-color: #ffc107;
-  color: black;
-}
-.modal-body { padding: 2px 16px; }
-.modal-footer {
-  padding: 2px 16px;
-  background-color: #ffc107;
-  color: black;
+
+/* The count's font size is 40% of the big button's width for up to 3
+   characters and shrinks to fit more (script.js sets --len to the number of
+   characters) but is never taller than the button. (A cqw is 1% of the width,
+   and a cqh 1% of the height, of the container, here the big button.) */
+#count {
+  font-size: min(80cqh, 120cqw / max(3, var(--len, 1)));
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  /* Center the digits themselves, not the line they sit on, which has room
+     above and below them that depends on the font (where browsers can;
+     elsewhere they sit a few px off center) */
+  text-box: trim-both cap alphabetic;
 }
 
+/* The footer: a status line, empty at first, over three rows of controls, on
+   a 4px grid: 16px margins, 12px between rows, 8px between neighbors, and
+   controls 44px tall, the smallest touch target Apple recommends. The 16px on
+   top keep the controls out of reach of touches at the very bottom of the big
+   button: phones give a touch to anything clickable within a finger's width
+   of it (in Chrome, up to 16px away), and the big button doesn't count as
+   clickable. Where there's room for both, the send row and the last row
+   share a line, leaving more of a landscape phone for tapping. The rows are
+   at most 800px wide, centered. */
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 24px;
+  padding: 16px max(16px, 50% - 400px); /* room at the bottom for the versiontag */
+  border-top: 1px solid var(--line);
+  background-color: var(--surface);
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.25;
+}
+.footer > * { flex-basis: 100%; }
+.footer > div:has(#subbut) { flex: 3 1 260px; }
+.footer > div:has(#loginbut) { flex: 1 1 220px; }
+.footer > div + div { margin-top: 12px; }
+
+/* Each row is a line of controls, which wrap only if they must, like when
+   zoomed way in. (Else the dropdown, as wide as its longest goal, would set
+   how narrow the row can get, hence the min-width.) */
+.footer > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+/* The status line takes no room till it has something to say, and at most 4
+   lines (of 1.25em), scrolling past that, so that even an error that's a whole
+   web page leaves room to tap */
+#status { max-height: 5em; overflow-y: auto; overflow-wrap: anywhere; }
+#status:not(:empty) { margin-bottom: 12px; }
+#status[data-kind=busy] { color: var(--yellow); }
+#status[data-kind=ok]   { color: var(--green); }
+#status[data-kind=err]  { color: var(--red); }
+
+.footer button, .footer select {
+  appearance: none;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid transparent; /* shows only in forced-colors modes */
+  border-radius: 22px; /* capsules */
+  background-color: var(--fill);
+  color: inherit;
+  font: inherit;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: background-color 120ms ease-out, opacity 120ms ease-out;
+}
+
+/* Grayed out: whatever can't be used now, at once, with no fade */
+.footer :disabled { opacity: var(--grayed); transition: none; }
+/* "Send N to" grays out along with the dropdown it labels */
+.footer label:has(+ :disabled) { opacity: var(--grayed); }
+
+/* The login button (the username, once logged in) starts the last row, where
+   its label for when logged out has the most room. On a narrow phone, that
+   label takes two lines rather than getting cut off. */
+#loginbut {
+  min-width: 0;
+  padding-block: 10px; /* for when its label takes two lines */
+  white-space: normal;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+
+#infobut { /* the help button, round, at the right */
+  flex: none;
+  width: 44px;
+  margin-left: auto;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+#goals { /* the first thing to get squeezed */
+  flex: 1 1 0; /* the room the rest of the row leaves, goals or no goals */
+  min-width: 5em; /* short of that, Submit goes on a line of its own */
+  padding: 0 26px 0 12px;
+  /* Up-and-down chevrons, like those of Apple's pop-up buttons, as far from
+     the right edge as the goal is from the left one, in longhands so that
+     hovering and pressing can still change the background color */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 14'%3E%3Cpath fill='none' stroke='%2398989f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M2 5l3-3 3 3M2 9l3 3 3-3'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 10px 14px;
+  text-overflow: ellipsis;
+}
+
+/* The number Submit sends, in semibold, with digits all as wide, so that less
+   moves as it changes */
+#num { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* Submit, the one primary action, is the one yellow button, when it can
+   send: grayed out, it's gray like the rest */
+#subbut { flex: none; font-weight: 600; }
+#subbut:enabled { background-color: var(--yellow); color: black; }
+
+/* The goal's safesum fills the rest of the last row, wrapping beside the
+   login button, or below it if that would leave it too narrow. With no goal,
+   it's empty and takes no room. While Beeminder updates the goal, as after
+   getting a datapoint, it's out of date, and grayed out. */
+#safesum { flex: 1 1 0; min-width: 6em; color: var(--text2); white-space: normal; }
+#safesum:empty { display: none; }
+#safesum[aria-busy=true] { opacity: var(--grayed); }
+
+/* Interaction states. With a mouse, the hand is over whatever can be clicked.
+   On devices that can hover, what's under the mouse turns a shade lighter, or
+   on yellow, darker. (On phones a hover color would stick after a tap.)
+   Pressing shows at once, and letting go fades back. A ring, set off from the
+   control so that it shows on any color, marks where the keyboard's focus is. */
+.footer :is(button, select):enabled, .close { cursor: pointer; }
+@media (hover: hover) {
+  .footer :is(button, select):enabled:hover { background-color: var(--fill-hover); }
+  #subbut:enabled:hover { background-color: var(--yellow-hover); }
+  .close:hover { background-color: rgb(0 0 0 / 0.08); }
+}
+.footer :is(button, select):enabled:active { background-color: var(--fill-press); transition: none; }
+#subbut:enabled:active { background-color: var(--yellow-press); }
+.close:active { background-color: rgb(0 0 0 / 0.16); transition: none; }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+/* The infinibee flies over the top of the big button while we wait on
+   Beeminder, not getting in the way of taps. For people who ask their device
+   for less motion, it just sits there, in the middle of its figure eight. */
+#infinibee {
+  position: fixed;
+  top: 8dvh;
+  left: 50%;
+  translate: -50%;
+  width: min(80vw, 360px);
+  pointer-events: none;
+}
+#infinibee svg { display: block; }
+/* The flight path is the lemniscate of Bernoulli, x = a cos t / (1 + sin^2 t),
+   y = a sin t cos t / (1 + sin^2 t), with a = 46 (in the svg's viewBox units),
+   as a smooth curve (Catmull-Rom spline) through 24 points on it */
+#infinibee image {
+  offset-path: path("M46 0C46 3.6 44 8.1 41.6 10.8C39.3 13.4 35.2 15.2 31.9 15.9C28.5 16.7 24.8 16.1 21.7 15.3C18.6 14.6 15.7 12.9 13.1 11.4C10.6 9.8 8.3 7.8 6.2 5.9C4 4.1 2.1 2 0 0C-2.1 -2 -4 -4.1 -6.2 -5.9C-8.3 -7.8 -10.6 -9.8 -13.1 -11.4C-15.7 -12.9 -18.6 -14.6 -21.7 -15.3C-24.8 -16.1 -28.5 -16.7 -31.9 -15.9C-35.2 -15.2 -39.3 -13.4 -41.6 -10.8C-44 -8.1 -46 -3.6 -46 0C-46 3.6 -44 8.1 -41.6 10.8C-39.3 13.4 -35.2 15.2 -31.9 15.9C-28.5 16.7 -24.8 16.1 -21.7 15.3C-18.6 14.6 -15.7 12.9 -13.1 11.4C-10.6 9.8 -8.3 7.8 -6.2 5.9C-4 4.1 -2.1 2 0 0C2.1 -2 4 -4.1 6.2 -5.9C8.3 -7.8 10.6 -9.8 13.1 -11.4C15.7 -12.9 18.6 -14.6 21.7 -15.3C24.8 -16.1 28.5 -16.7 31.9 -15.9C35.2 -15.2 39.3 -13.4 41.6 -10.8C44 -8.1 46 -3.6 46 0Z");
+  offset-rotate: 0deg;
+  animation: fly 2s linear infinite;
+}
+@keyframes fly { to { offset-distance: 100%; } }
+@media (prefers-reduced-motion: reduce) { #infinibee image { offset-path: none; } }
+
+/* The help is a sheet that slides up from the bottom. If the screen is too
+   short for it, it scrolls, with the header and its × staying put. */
+dialog {
+  margin: auto auto 0; /* at the bottom, and centered if there's room */
+  width: 100%;
+  max-width: 640px; /* for lines short enough to read */
+  max-height: calc(100% - 48px); /* always a strip of backdrop to tap */
+  padding: 0;
+  border: 0;
+  border-radius: 12px 12px 0 0;
+  overflow: auto;
+  background-color: var(--surface);
+  color: var(--text);
+  font-size: 17px;
+  line-height: 1.5;
+  animation: slideIn 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+}
+dialog::backdrop {
+  background-color: rgba(0,0,0,0.4); /* Black w/ opacity */
+  animation: fadeIn 0.25s;
+}
+.close { /* the X in the upper right aka close button */
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background-color: transparent;
+  color: inherit;
+  font-size: 28px;
+  font-weight: bold;
+  line-height: 1;
+  transition: background-color 120ms ease-out;
+}
+.close:focus-visible { outline-color: black; } /* the blue is too faint on yellow */
+.modal-header {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: row-reverse; /* the ×, first in the HTML, at the right */
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 8px 8px 16px;
+  background-color: var(--yellow);
+  color: black;
+}
+.modal-header h2 { margin: 0; font-size: 22px; line-height: 1.25; }
+.modal-body { padding: 16px 16px 24px; }
+.modal-body p { margin: 0; text-wrap: pretty; } /* no one-word last lines */
+.modal-body h2 { margin: 24px 0 8px; font-size: 18px; line-height: 1.25; }
+
 /* Modal Animation */
-@-webkit-keyframes slideIn {
-  from {bottom: -300px; opacity: 0} 
-  to {bottom: 0; opacity: 1}
-}
 @keyframes slideIn {
-  from {bottom: -300px; opacity: 0}
-  to {bottom: 0; opacity: 1}
-}
-@-webkit-keyframes fadeIn {
-  from {opacity: 0} 
-  to {opacity: 1}
+  from {transform: translateY(100%); opacity: 0}
+  to {transform: none; opacity: 1}
 }
 @keyframes fadeIn {
-  from {opacity: 0} 
+  from {opacity: 0}
   to {opacity: 1}
+}
+@media (prefers-reduced-motion: reduce) {
+  dialog, dialog::backdrop { animation: none; }
 }
