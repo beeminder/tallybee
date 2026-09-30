@@ -31,7 +31,8 @@
 </head>
 <body>
 <div class='versiontag'>v2026.09.30b&nbsp;</div>
-<div id="bigbut"><span id="count">0</span></div>
+<!-- The big button is a button to the keyboard too: see script.js -->
+<div id="bigbut" role="button" tabindex="0"><span id="count">0</span></div>
 <!-- While we wait on Beeminder, the infinibee (Beeminder's bee logo, from
      beeminder.com/press) flies a lemniscate (a figure eight; see style.css) -->
 <div id="infinibee" hidden>
@@ -46,11 +47,15 @@
      control out from under the finger that just tapped it. Screen readers
      read out each new message. -->
 <span id="status" role="status"></span>
+<!-- Clear, which wipes out the count (though UNDO can bring it back), sits
+     apart from the rest. −1 takes one off, and UNDO undoes whatever was done
+     last: a tap, a −1, or a Clear (see script.js). -->
 <div>
-<button id="undobut">UNDO</button>
 <!-- label for the button that zeroes the count without submitting it
      (Beedroid's is "Clear") -->
 <button id="clearbut">Clear</button>
+<button id="undobut" disabled>UNDO</button>
+<button id="minusbut">−1</button>
 <button id="infobut" aria-label="Help">?</button>
 </div>
 <div>

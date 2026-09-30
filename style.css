@@ -108,11 +108,12 @@ body {
    a 4px grid: 16px margins, 12px between rows, 8px between neighbors, and
    controls 44px tall, the smallest touch target Apple recommends. The 16px on
    top keep the controls out of reach of touches at the very bottom of the big
-   button: phones give a touch to anything clickable within a finger's width
-   of it (in Chrome, up to 16px away), and the big button doesn't count as
-   clickable. Where there's room for both, the send row and the last row
-   share a line, leaving more of a landscape phone for tapping. The rows are
-   at most 800px wide, centered. */
+   button: phones give a touch to the nearest clickable thing within a
+   finger's width of it (in Chrome, up to 16px away). The big button, which
+   can take the keyboard's focus, counts as clickable too, so a touch just
+   below it, in the top of the footer, counts. Where there's room for both,
+   the send row and the last row share a line, leaving more of a landscape
+   phone for tapping. The rows are at most 800px wide, centered. */
 .footer {
   display: flex;
   flex-wrap: wrap;
@@ -152,8 +153,9 @@ body {
 
 .footer button, .footer select {
   appearance: none;
+  min-width: 44px;
   min-height: 44px;
-  padding: 0 16px;
+  padding: 0 12px;
   border: 1px solid transparent; /* shows only in forced-colors modes */
   border-radius: 22px; /* capsules */
   background-color: var(--fill);
@@ -183,11 +185,21 @@ body {
 #infobut { /* the help button, round, at the right */
   flex: none;
   width: 44px;
-  margin-left: auto;
   padding: 0;
   border-radius: 50%;
   font-size: 18px;
   font-weight: 600;
+}
+
+/* Clear, which can't be undone, stands apart, at the left, and looks it: red,
+   Apple's color for buttons that destroy something, and outlined rather than
+   filled, like no other button. (Red on the other buttons' gray would be too
+   faint to read, hence its faint red hover and pressed colors, below.) */
+#clearbut {
+  margin-right: auto;
+  color: var(--red);
+  background-color: transparent;
+  border-color: rgb(255 69 58 / 0.55); /* --red, faint */
 }
 
 #goals { /* the first thing to get squeezed */
@@ -222,20 +234,25 @@ body {
 #safesum[aria-busy=true] { opacity: var(--grayed); }
 
 /* Interaction states. With a mouse, the hand is over whatever can be clicked.
-   On devices that can hover, what's under the mouse turns a shade lighter, or
-   on yellow, darker. (On phones a hover color would stick after a tap.)
+   On devices that can hover, what's under the mouse turns a shade lighter (on
+   yellow, darker, and Clear, faintly red). (On phones a hover color would
+   stick after a tap.)
    Pressing shows at once, and letting go fades back. A ring, set off from the
    control so that it shows on any color, marks where the keyboard's focus is. */
 .footer :is(button, select):enabled, .close { cursor: pointer; }
 @media (hover: hover) {
   .footer :is(button, select):enabled:hover { background-color: var(--fill-hover); }
   #subbut:enabled:hover { background-color: var(--yellow-hover); }
+  #clearbut:enabled:hover { background-color: rgb(255 69 58 / 0.06); }
   .close:hover { background-color: rgb(0 0 0 / 0.08); }
 }
 .footer :is(button, select):enabled:active { background-color: var(--fill-press); transition: none; }
 #subbut:enabled:active { background-color: var(--yellow-press); }
+#clearbut:enabled:active { background-color: rgb(255 69 58 / 0.1); }
 .close:active { background-color: rgb(0 0 0 / 0.16); transition: none; }
 :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* The big button fills the screen's width, so its ring goes just inside it */
+#bigbut:focus-visible { outline-offset: -2px; }
 
 /* The infinibee flies over the top of the big button while we wait on
    Beeminder, not getting in the way of taps. For people who ask their device

@@ -10,17 +10,13 @@ const API = 'https://www.beeminder.com/api/v1/';
 const PATIENCE = 30000;
 
 // What to tell the user when Beeminder rejects the access token we saved, as
-// happens if they log in to TallyBee on another device. TODO: English for:
-// Beeminder rejected your login; log in again (with the login button). It was
-// "Got invalid token result. Reload page to log in again." before there was a
-// login button.
-const REAUTH = "Beeminder tesseram tuam reiecit. Iterum intra.";
+// happens if they log in to TallyBee on another device.
+const REAUTH = "Are you logged in on another device? Try logging in again here.";
 
 // What to tell the user when the page's URL is a login redirect from Beeminder
 // (like with an access token in it) that this tab didn't ask for, as from a
-// link someone crafted to log you in as them. TODO: English for: TallyBee
-// ignored a login it didn't ask for.
-const UNASKED = "Nexus non rogatus neglectus est.";
+// link someone crafted to log you in as them.
+const UNASKED = "Shenanigans afoot. Tell us you got ERROR_1526 if you see this.";
 
 // Throw an error with message msg unless cond is true
 function assert(cond, msg) { if (!cond) throw new Error(msg) }
