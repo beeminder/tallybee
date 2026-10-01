@@ -177,13 +177,15 @@ async function choose(page, slug) {
   assert.equal(await page.inputValue('#goals'), slug)
 }
 
-// Wait up to 3 seconds for the text of the element matching selector sel to
-// match want (a string for exact match or else a regex)
+// Wait up to 3 seconds for the text of the element matching selector sel (or,
+// for a text field, what's in it) to match want (a string for exact match or
+// else a regex)
 async function see(page, sel, want) {
   const ok = s => typeof want === 'string' ? s === want : want.test(s)
   let s
   for (let i = 0; i < 30; i++) {
-    s = await page.locator(sel).first().textContent()
+    s = await page.locator(sel).first()
+                  .evaluate(e => e.tagName === 'INPUT' ? e.value : e.textContent)
     if (ok(s)) return
     await page.waitForTimeout(100)
   }
@@ -257,21 +259,32 @@ async function window2(page, url) {
 const status = (page, url) =>
   page.evaluate(async u => (await fetch(u)).status, url)
 
+// The app manifest Chrome finds on the page: json, what it says, and parsed,
+// how Chrome reads it, with its URLs resolved and its fields' names in
+// camelCase, like startUrl (though Chrome leaves some out, like short_name)
+async function appManifest(page) {
+  const cdp = await page.context().newCDPSession(page)
+  const { errors, data, manifest } = await cdp.send('Page.getAppManifest')
+  assert.deepEqual(errors, [])
+  return { json: JSON.parse(data), parsed: manifest }
+}
+
 // Serve this directory at http://localhost, which browsers trust like https,
 // passing each file's content through edit, and call f with its URL, then stop
 // serving. (Unlike the routes that the other quals use, this lets a service
 // worker work, and Chrome let a page be installed as an app.)
 async function localhost(f, edit = (path, body) => body) {
   const types = { '.html': 'text/html', '.js': 'text/javascript',
-                  '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml',
-                  '.webmanifest': 'application/manifest+json' }
+                  '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml' }
   const server = createServer((req, res) => {
     const path = join(fileURLToPath(new URL('.', import.meta.url)),
                       new URL(req.url, 'http://x').pathname.replace(/\/$/, '/index.html'))
     res.writeHead(existsSync(path) ? 200 : 404,
                   { 'content-type': types[extname(path)] ?? 'text/plain' })
     res.end(existsSync(path) ? edit(path, readFileSync(path)) : 'Not found')
-  }).listen(0)
+  })
+  // to this computer only, not to others on its network
+  await new Promise(r => server.listen(0, 'localhost', r))
   try { await f(`http://localhost:${server.address().port}/`) }
   finally { server.close() }
 }
@@ -566,6 +579,7 @@ qual('Space and Enter count, right from the start, like taps', async page => {
 
 // Replicata: hold Space down, then Enter, long enough for the keys to repeat.
 // Expectata: each counts one, as a long press does.
+// Resultata (counting each keydown): a count for each of the keys' repeats.
 qual('holding Space or Enter down counts once', async page => {
   await login(page)
   for (const key of [' ', 'Enter']) {
@@ -596,6 +610,8 @@ qual('the big button shows a ring inside the screen when the keyboard focuses it
 
 // Replicata: on a phone, open TallyBee and tap the big button.
 // Expectata: no ring, before or after the tap.
+// Resultata (with the big button given the focus plainly): a blue ring around
+// most of the screen, from the start.
 qual('tapping the big button shows no ring', async page => {
   await login(page)
   const ring = () => page.$eval('#bigbut', b => b.matches(':focus-visible'))
@@ -608,6 +624,8 @@ qual('tapping the big button shows no ring', async page => {
 // Replicata: focus −1, or the ? and then the help's ×, and press Space or
 // Enter.
 // Expectata: that control does its thing, and the count doesn't go up.
+// Resultata (counting Space and Enter anywhere on the page): it does its thing,
+// and the count goes up too.
 qual("Space and Enter on the footer's controls and in the help don't count", async page => {
   await login(page)
   await page.focus('#minusbut')
@@ -629,6 +647,9 @@ qual('tapping works on phones that cannot buzz, like iPhones', async page => {
   assert.equal(await count(page), 2)
 })
 
+// Replicata: tap once, then press −1 three times.
+// Expectata: -2.
+// Resultata (before): there was no −1.
 qual('the −1 button subtracts one, even below zero', async page => {
   await login(page)
   await tap(page, '#bigbut')
@@ -659,6 +680,7 @@ qual('UNDO undoes whatever was just done: a tap, −1, or Clear', async page => 
 // Submit again.
 // Expectata: the resend is the same datapoint as the first try (the same
 // requestid), so Beeminder can't end up with two.
+// Resultata (before): a Clear couldn't be undone.
 qual('UNDO undoes a Clear, datapoint and all', async (page, bee) => {
   await login(page)
   bee.reply = c => c.method === 'POST' ? 'abort' : null
@@ -695,9 +717,38 @@ qual('UNDO is grayed out when there is nothing to undo', async page => {
   assert.ok(await disabled(page, '#undobut'), 'after a Submit')
 })
 
+// Replicata: TallyBee from before there was an UNDO (which remembered no prev)
+// left a count of 5. Open this TallyBee.
+// Expectata: 5, with UNDO grayed out.
+qual('a count left by TallyBee from before UNDO still loads', async page => {
+  await page.goto(APP)
+  await page.evaluate(() => localStorage.setItem('tallybee', JSON.stringify(
+    { count: 5, requestid: 'r-old', pin: null, slug: 'pushups' })))
+  await page.reload()
+  await see(page, '#bigbut', '5')
+  assert.ok(await disabled(page, '#undobut'))
+})
+
+// Replicata: what TallyBee remembers gets broken, like missing its requestid
+// (by a bug, say). Open TallyBee.
+// Expectata: an error saying so.
+// Resultata (before): no error. The count was there, under a new requestid,
+// quietly put in for the missing one.
+qual('a broken memory fails loudly, rather than getting quietly filled in', async (page, bee) => {
+  await page.goto(APP)
+  await page.evaluate(() => localStorage.setItem('tallybee', JSON.stringify({ count: 3 })))
+  await page.reload()
+  await see(page, '#status', /^Error: .*"count":3/)
+  await expectError(page, bee, /"count":3/)
+  // and the error from then showing the rest of the page, which can't be done
+  // with script.js stopped partway
+  await expectError(page, bee, /before initialization/)
+})
+
 // Replicata: tap 4 and Clear by mistake; the phone reloads the page before you
 // notice. Press UNDO.
 // Expectata: the 4 are back.
+// Resultata (before): -1, as UNDO only ever subtracted one.
 qual('UNDO survives reloading the page', async page => {
   await login(page)
   await tap(page, '#bigbut', 4)
@@ -716,9 +767,9 @@ qual('the clear button zeroes the count', async page => {
   await see(page, '#bigbut', '0')
 })
 
-// Replicata: reach for UNDO, or Submit, or the ?, and miss a little.
-// Expectata: never Clear, which can't be undone: it's at least 44px (about a
-// fingertip) from each of them, and looks unlike UNDO.
+// Replicata: reach for −1, UNDO, Submit or the ?, and miss a little.
+// Expectata: never Clear, which wipes out the count: it's at least 44px
+// (about a fingertip) from each of them, and looks unlike UNDO.
 // Resultata (before): Clear was 8px from UNDO, and looked just like it.
 for (const [width, height] of [[320, 568], [390, 844], [600, 800], [844, 390]])
   qual(`Clear is far from −1, UNDO, Submit and ? (${width}x${height})`, async page => {
@@ -910,6 +961,22 @@ qual('Clear is grayed out while Beeminder takes the datapoint', async (page, bee
   open(null)
   await see(page, '#bigbut', '0')
   assert.ok(!await disabled(page, '#clearbut'))
+})
+
+// Replicata: tap 3, hit Submit, and hit UNDO before Beeminder replies.
+// Expectata: UNDO can't be pressed till then, since the Submit can't be undone.
+// Resultata (with UNDO pressable): an error once Beeminder replied, as UNDO
+// waits for the Submit to finish, and then there's nothing to undo.
+qual('UNDO is grayed out while Beeminder takes the datapoint', async (page, bee) => {
+  await login(page)
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'POST' ? shut : null
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  await calls(page, bee, 2)
+  assert.ok(await disabled(page, '#undobut'))
+  open(null)
+  await see(page, '#bigbut', '0')
 })
 
 qual('the goal dropdown is grayed out while Beeminder takes the datapoint', async (page, bee) => {
@@ -1177,6 +1244,94 @@ qual('a non-cumulative goal with no datapoints starts from its current value', a
   await see(page, '#num', '8')
 })
 
+// Type the number to send, n, where it says "Send N to", and press Enter
+async function type(page, n) {
+  await page.fill('#num', n)
+  await page.press('#num', 'Enter')
+}
+
+// Replicata: you did 50 pushups without TallyBee. Type 50 where it says "Send
+// 0 to", and press Enter; then Submit.
+// Expectata: the count is 50, and Submit sends 50.
+// Resultata (before): the number couldn't be typed, only tapped out.
+qual('you can type the number to send', async (page, bee) => {
+  await login(page)
+  await type(page, '50')
+  await see(page, '#bigbut', '50')
+  await tap(page, '#subbut')
+  await see(page, '#bigbut', '0')
+  assert.deepEqual(values(bee), ['50'])
+})
+
+// Replicata: on odometer goal pages, at 120, type 130 where it says "Send 120
+// to".
+// Expectata: the count is the difference, 10, and Submit sends 130.
+qual('on an odometer goal you type the reading, and the count is the difference', async (page, bee) => {
+  await login(page)
+  await choose(page, 'pages')
+  await type(page, '130')
+  await see(page, '#bigbut', '10')
+  await tap(page, '#subbut')
+  await see(page, '#bigbut', '0')
+  assert.deepEqual(values(bee), ['130'])
+})
+
+// Replicata: tap 3, type 50 by mistake, and press UNDO.
+// Expectata: 3 again.
+qual('UNDO undoes a typed number', async page => {
+  await login(page)
+  await tap(page, '#bigbut', 3)
+  await type(page, '50')
+  await see(page, '#bigbut', '50')
+  await tap(page, '#undobut')
+  await see(page, '#bigbut', '3')
+})
+
+// Replicata: tap 3, then type "abc", or nothing, or "1e3" where the number
+// goes, and press Enter.
+// Expectata: each time, an error that shows what was typed, and the count and
+// the number to send as they were.
+qual('typing something that is not a plain number fails loudly, changing nothing', async (page, bee) => {
+  await login(page)
+  await tap(page, '#bigbut', 3)
+  for (const junk of ['abc', '', '1e3']) {
+    await type(page, junk)
+    await see(page, '#status', `Error: ${JSON.stringify(junk)}`)
+    await expectError(page, bee, /./)
+    assert.equal(await count(page), 3)
+    assert.equal(await page.inputValue('#num'), '3')
+  }
+})
+
+// Replicata: on an odometer goal at 0.14 (hours, say), type 1.5.
+// Expectata: Submit sends 1.5 (and the count is 1.36, the difference).
+qual('you can type a number with decimals', async (page, bee) => {
+  bee.goals.push({ slug: 'hours', kyoom: false, curval: 0.14,
+                   last_datapoint: { value: 0.14 }, safesum: 'safe for 2 days',
+                   queued: false })
+  await login(page)
+  await choose(page, 'hours')
+  await type(page, '1.5')
+  await see(page, '#bigbut', '1.36')
+  await tap(page, '#subbut')
+  await see(page, '#bigbut', '0')
+  assert.deepEqual(values(bee), ['1.5'])
+})
+
+// Replicata: start typing a number, and before you press Enter, TallyBee
+// loads the goals again (as it does every 2 seconds while Beeminder updates
+// the goal).
+// Expectata: what you're typing stays as you typed it.
+qual("TallyBee doesn't change the number to send while you're typing it", async page => {
+  await login(page)
+  await page.fill('#num', '42')
+  await comeback(page) // which loads the goals again
+  await page.waitForTimeout(300)
+  assert.equal(await page.inputValue('#num'), '42')
+  await page.press('#num', 'Enter')
+  await see(page, '#bigbut', '42')
+})
+
 qual('the footer shows what Submit will send', async page => {
   await login(page)
   await see(page, '#num', '0')
@@ -1204,6 +1359,97 @@ qual('resending an odometer datapoint after a lost reply sends the same value', 
   await expectError(page, bee, /fetch/i)
   await comeback(page)
   await see(page, '#safesum', 'safe for 4 days')
+  await see(page, '#num', '123')
+  bee.reply = () => null
+  await tap(page, '#subbut')
+  await see(page, '#bigbut', '0')
+  assert.deepEqual(values(bee), ['123', '123'])
+  const [a, b] = posts(bee).map(p => p.params.requestid)
+  assert.equal(a, b)
+})
+
+// Replicata: on odometer goal pages (at 120), tap 3 and Submit. Beeminder saves
+// 123, but its reply is lost. Press UNDO, to undo the third tap, and switch
+// away and back, which refreshes the goals, now at 123. Submit again.
+// Expectata: 122, as the same datapoint, updating the 123 in place.
+// Resultata (before): 125, since UNDO put back the datapoint as it was before
+// its first Submit, with no base pinned to it, so it got built on the 123.
+qual('UNDO after a lost reply keeps the odometer datapoint the same datapoint', async (page, bee) => {
+  await login(page)
+  await choose(page, 'pages')
+  bee.reply = c => {
+    if (c.method !== 'POST') return null
+    bee.goals[1].last_datapoint = { value: Number(c.params.value),
+                                    requestid: c.params.requestid }
+    bee.goals[1].safesum = 'safe for 4 days'
+    return 'abort'
+  }
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  await expectError(page, bee, /fetch/i)
+  await tap(page, '#undobut')
+  await see(page, '#bigbut', '2')
+  await comeback(page)
+  await see(page, '#safesum', 'safe for 4 days')
+  await see(page, '#num', '122')
+  bee.reply = () => null
+  await tap(page, '#subbut')
+  await see(page, '#bigbut', '0')
+  assert.deepEqual(values(bee), ['123', '122'])
+  const [a, b] = posts(bee).map(p => p.params.requestid)
+  assert.equal(a, b)
+})
+
+// Replicata: on odometer goal pages (at 120), tap 3 and Submit, and tap once
+// more while it's sending. It gets a 401, because you logged in on another
+// device (and entered 130 there). Log in again here ("Send 134"), and UNDO.
+// Expectata: "Send 133".
+// Resultata (before): "Send 123", built on the 120 that the rejected Submit
+// had pinned, which UNDO put back.
+qual('UNDO after a rejected submission brings back no base from it', async (page, bee) => {
+  await login(page)
+  await choose(page, 'pages')
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'POST' ? shut.then(() => null) : null
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  await calls(page, bee, 4)
+  await tap(page, '#bigbut')
+  bee.tokens = ['tok456']
+  bee.goals[1].last_datapoint = { value: 130 }
+  open()
+  await see(page, '#status', `Error: ${REAUTH}`)
+  await expectError(page, bee, new RegExp(RegExp.escape(REAUTH)))
+  await login(page, 'alice', 'tok456')
+  await see(page, '#num', '134')
+  await tap(page, '#undobut')
+  await see(page, '#bigbut', '3')
+  await see(page, '#num', '133')
+})
+
+// Replicata: on odometer goal pages (at 120), tap 3 and Submit. Beeminder saves
+// 123, but its reply is lost. Switch away and back, which refreshes the goals,
+// now at 123. Press Clear by mistake, then UNDO, and Submit again.
+// Expectata: 123 again, as the same datapoint, updating it in place.
+qual('UNDO of a Clear brings back the odometer datapoint, base and all', async (page, bee) => {
+  await login(page)
+  await choose(page, 'pages')
+  bee.reply = c => {
+    if (c.method !== 'POST') return null
+    bee.goals[1].last_datapoint = { value: Number(c.params.value),
+                                    requestid: c.params.requestid }
+    bee.goals[1].safesum = 'safe for 4 days'
+    return 'abort'
+  }
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  await expectError(page, bee, /fetch/i)
+  await comeback(page)
+  await see(page, '#safesum', 'safe for 4 days')
+  await tap(page, '#clearbut')
+  await see(page, '#bigbut', '0')
+  await tap(page, '#undobut')
+  await see(page, '#bigbut', '3')
   await see(page, '#num', '123')
   bee.reply = () => null
   await tap(page, '#subbut')
@@ -1543,16 +1789,56 @@ qual('a link to a goal you do not have selects no goal', async page => {
   assert.ok(await disabled(page, '#subbut'))
 })
 
+// Replicata: open TallyBee at a goal's URL, like ?goal=pages, and install it
+// as an app (or add it to the home screen).
+// Expectata: an app named for the goal, "pages", that opens pages.
+// Resultata (before): an app named "TallyBee".
+qual("an app installed from a goal's page is named for the goal, and opens it", async page => {
+  await page.goto(APP + '?goal=pages')
+  const { json, parsed } = await appManifest(page)
+  assert.deepEqual([parsed.name, json.short_name, parsed.startUrl, parsed.id],
+                   ['pages', 'pages', APP + '?goal=pages', APP + '?goal=pages'])
+})
+
+// Replicata: log in for the first time, which loads TallyBee at its plain URL
+// and then, once the goals load, selects the first goal, pushups, putting it in
+// the URL; install it.
+// Expectata: an app for pushups.
+// Resultata (before): an app named "TallyBee" that opened TallyBee's plain URL,
+// and so whichever goal was selected last, since Chrome on Android reads the
+// manifest as soon as the page loads, before the goals do, and keeps it.
+qual('an app installed right after logging in is for the goal selected', async (page, bee) => {
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
+  const state = await authorize(page)
+  await page.goto(`${APP}?` +
+    new URLSearchParams({ access_token: TOKEN, username: 'alice', state }))
+  await page.waitForURL(APP)
+  await appManifest(page) // as Chrome on Android does when the page loads
+  open()
+  await see(page, '#goals', /pushups/)
+  assert.equal(page.url(), APP + '?goal=pushups')
+  const { json, parsed } = await appManifest(page)
+  assert.deepEqual([parsed.name, json.short_name, parsed.startUrl, parsed.id],
+                   ['pushups', 'pushups', APP + '?goal=pushups', APP + '?goal=pushups'])
+})
+
+// Safari reads only the first app manifest a page has, so the page starts with
+// none, till script.js adds the one for the page's goal
+qual("the page starts with no app manifest, so that Safari reads its goal's", async page => {
+  await page.goto(APP)
+  const html = await page.evaluate(async u => (await fetch(u)).text(), APP)
+  assert.doesNotMatch(html, /<link[^>]*manifest/)
+  assert.equal(await page.locator('link[rel=manifest]').count(), 1)
+})
+
 // ----------------------------------------------------- icons and previews
 
 // Chrome won't install apps in the private-browsing profiles the other quals
 // use, nor from pages we serve ourselves under someone else's https URL. So
 // this one serves this directory at http://localhost (which Chrome trusts like
-// https) to Chrome with a throwaway ordinary profile. Desktop Chrome's check
-// wants a start_url in the manifest, which TallyBee leaves out on purpose: an
-// app or icon installed from a page then opens that page's URL, goal included,
-// rather than the start_url. (Chrome on Android installs without one.)
-test("Chrome's only complaint about TallyBee as an app is the missing start_url", async () => {
+// https) to Chrome with a throwaway ordinary profile.
+test('Chrome has no complaint about TallyBee as an app', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'tallybee-quals-'))
   const context = await chromium.launchPersistentContext(dir, { channel: 'chrome' })
   try {
@@ -1561,7 +1847,7 @@ test("Chrome's only complaint about TallyBee as an app is the missing start_url"
       await page.goto(url + '?goal=pages')
       const cdp = await context.newCDPSession(page)
       const { installabilityErrors } = await cdp.send('Page.getInstallabilityErrors')
-      assert.deepEqual(installabilityErrors.map(e => e.errorId), ['start-url-not-valid'])
+      assert.deepEqual(installabilityErrors.map(e => e.errorId), [])
     })
   } finally {
     await context.close()
@@ -1578,7 +1864,7 @@ const ready = page => page.waitForFunction(
 
 // Replicata: open TallyBee, then lose the connection (say, in a gym's
 // basement), and open it again.
-// Expectata: it opens, and counts.
+// Expectata: it opens, looking as it does online, and counts.
 // Resultata (before): the browser's own page saying there's no internet.
 test('after one visit, TallyBee opens and counts with no connection', async () => {
   const context = await browser.newContext({ viewport: PHONE, hasTouch: true,
@@ -1592,6 +1878,8 @@ test('after one visit, TallyBee opens and counts with no connection', async () =
       await page.reload()
       await page.tap('#bigbut')
       assert.equal(await page.textContent('#bigbut'), '1')
+      const { height } = await box(page, '#bigbut') // styled: most of the screen
+      assert.ok(height > PHONE.height / 2, `the big button is ${height}px tall`)
     })
   } finally { await context.close() }
 })
@@ -1620,6 +1908,59 @@ test('online, TallyBee always opens its newest version', async () => {
   } finally { await context.close() }
 })
 
+// The URLs of every copy the service worker keeps (see sw.js)
+const copies = page => page.evaluate(async () => (await Promise.all(
+  (await caches.keys()).map(async n => (await (await caches.open(n)).keys())
+    .map(r => r.url)))).flat())
+
+// Replicata: open TallyBee at a goal; a new version of TallyBee gets
+// published; open it again; then lose the connection and open it once more.
+// Expectata: the new version, page and script both.
+// Resultata (before): the version from the first visit, since the service
+// worker never managed to update its copies.
+test('offline, TallyBee opens the version it last opened online', async () => {
+  let version = 1
+  const context = await browser.newContext()
+  try {
+    await localhost(async url => {
+      const page = await context.newPage()
+      await page.goto(url + '?goal=pushups')
+      await ready(page)
+      version = 2
+      await page.reload() // now with the service worker answering
+      assert.equal(await page.title(), 'TallyBee 2')
+      await page.waitForTimeout(500) // for the service worker to keep its copies
+      await context.setOffline(true)
+      await page.reload()
+      assert.deepEqual([await page.title(), await page.evaluate(() => window.version)],
+                       ['TallyBee 2', 2])
+    }, (path, body) => path.endsWith('index.html')
+      ? String(body).replace('<title>TallyBee</title>', `<title>TallyBee ${version}</title>`)
+      : path.endsWith('script.js') ? `${body}\nwindow.version = ${version}\n` : body)
+  } finally { await context.close() }
+})
+
+// Replicata: with the service worker on, log in, which means Beeminder sends
+// you back to TallyBee with your access token in the URL.
+// Expectata: the service worker keeps no copy under that URL. (TallyBee takes
+// the token out of the page's URL right away: see autoLogin.)
+test('the service worker keeps no URL with an access token in it', async () => {
+  const context = await browser.newContext()
+  try {
+    await localhost(async url => {
+      const page = await context.newPage()
+      await page.goto(url)
+      await ready(page)
+      await page.goto(url + '?' + new URLSearchParams({ access_token: 'SECRET',
+                                                       username: 'alice', state: 'x' }))
+      await page.waitForTimeout(500) // for the service worker to keep its copies
+      const urls = await copies(page)
+      assert.ok(urls.length > 0 && urls.every(u => !u.includes('SECRET')),
+                JSON.stringify(urls))
+    })
+  } finally { await context.close() }
+})
+
 qual("the app manifest: TallyBee, standalone, black, with icons that exist", async page => {
   await page.goto(APP)
   const cdp = await page.context().newCDPSession(page)
@@ -1628,7 +1969,7 @@ qual("the app manifest: TallyBee, standalone, black, with icons that exist", asy
   const m = JSON.parse(data)
   assert.equal(m.name, 'TallyBee')
   assert.equal(m.display, 'standalone')
-  assert.equal(m.start_url, undefined, 'see the qual about the missing start_url')
+  assert.equal(m.start_url, APP) // with no goal named in the URL, and none selected yet
   assert.equal(m.theme_color, '#000000')
   assert.equal(m.background_color, '#000000')
   for (const icon of m.icons) {
@@ -1641,6 +1982,38 @@ qual("the app manifest: TallyBee, standalone, black, with icons that exist", asy
   }
   assert.deepEqual(m.icons.map(i => `${i.sizes} ${i.purpose ?? 'any'}`).sort(),
                    ['192x192 any', '512x512 any', '512x512 maskable'])
+})
+
+// Replicata: install TallyBee on Android, which crops its icon (the maskable
+// one) to a circle or some other shape, so that only the icon's middle 80%
+// circle is sure to show.
+// Expectata: big tally marks, with the disclosure still all there.
+// Resultata (before): the tally marks spanned 27% of the icon's width, with a
+// lot of empty space around them.
+qual("Android's icon: big tally marks, the disclosure, nothing outside the middle 80%", async page => {
+  await page.goto(APP)
+  const cdp = await page.context().newCDPSession(page)
+  const { url, data } = await cdp.send('Page.getAppManifest')
+  const icon = JSON.parse(data).icons.find(i => i.purpose === 'maskable')
+  const { span, red, outside } = await page.evaluate(async u => {
+    const i = await createImageBitmap(await (await fetch(u)).blob())
+    const c = new OffscreenCanvas(i.width, i.height).getContext('2d')
+    c.drawImage(i, 0, 0)
+    const { data: d, width: w, height: h } = c.getImageData(0, 0, i.width, i.height)
+    const xs = [] // where the tally marks' blue (#2e6bf0) is
+    let red = 0, outside = 0
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const [r, g, b] = d.subarray(4 * (y * w + x))
+      if (Math.abs(r - 0x2e) + Math.abs(g - 0x6b) + Math.abs(b - 0xf0) < 60) xs.push(x)
+      if (r > 150 && g < 90 && b < 90) red++
+      const pale = r >= 250 && g >= 215 && b <= g - 5 // the background's yellows
+      if (Math.hypot(x + 0.5 - w / 2, y + 0.5 - h / 2) > 0.4 * w && !pale) outside++
+    }
+    return { span: (Math.max(...xs) - Math.min(...xs) + 1) / w, red, outside }
+  }, new URL(icon.src, url).href)
+  assert.ok(span > 1 / 3, `the tally marks span ${span} of the icon's width`)
+  assert.ok(red > 500, `only ${red} pixels of the disclosure's red`)
+  assert.equal(outside, 0, 'pixels outside the middle 80% that are not background')
 })
 
 qual('link previews get a title, description, and a 1200x630 image', async page => {
@@ -2035,8 +2408,8 @@ qual('the keyboard focus shows clearly', async page => {
 
 // Replicata: use TallyBee with a screen reader.
 // Expectata: the page in English; the dropdown called "Send N to"; the ? and
-// × buttons called by a word (for now in Latin: see index.html), not "question
-// mark" and "times"; and the help called TallyBee.
+// × buttons called by a word, not "question mark" and "times"; and the help
+// called TallyBee.
 // Resultata (before): none of that.
 qual('screen readers get names for the dropdown, the ? and × buttons, and the help', async page => {
   await login(page)
@@ -2050,17 +2423,18 @@ qual('screen readers get names for the dropdown, the ? and × buttons, and the h
 
 // Replicata: open TallyBee on a slow connection, and look at it before it's
 // done loading.
-// Expectata: the dropdown and Submit grayed out, as they are once it has
-// loaded, with nothing to submit.
+// Expectata: the dropdown, Submit and UNDO grayed out, as they are once it has
+// loaded, with nothing to submit or undo.
 // Resultata (before): Submit, yellow, looking ready to use, till script.js
 // ran.
-qual('the dropdown and Submit start out grayed out, before script.js runs', async page => {
+qual('the dropdown, Submit and UNDO start out grayed out, before script.js runs', async page => {
   const [shut, open] = gate()
   await page.route(APP + 'script.js', r => shut.then(() => serve(r)))
   await page.goto(APP, { waitUntil: 'commit' })
   await page.waitForSelector('#subbut', { state: 'attached' })
   assert.ok(await disabled(page, '#goals'))
   assert.ok(await disabled(page, '#subbut'))
+  assert.ok(await disabled(page, '#undobut'))
   open()
 })
 

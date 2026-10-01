@@ -22,7 +22,8 @@ window.addEventListener('unhandledrejection', e => fail(e.reason))
 // icon on the device can share it, so it's read afresh wherever it's used. (A
 // goal's slug is its short name, the one in its URL, like the pushups in
 // beeminder.com/alice/pushups.)
-// count: taps, less −1s, not yet submitted to Beeminder
+// count: taps, less −1s, not yet submitted to Beeminder (or what makes a
+//   number typed as the number to send: see #num)
 // requestid: Beeminder's idempotency key for the pending datapoint, the one
 //   Submit sends. Resending the datapoint after a failure updates it in place
 //   if Beeminder got it after all (as when only the reply got lost), rather than
@@ -32,25 +33,28 @@ window.addEventListener('unhandledrejection', e => fail(e.reason))
 //   value was built on, so that a resend is the same datapoint even if the
 //   goal's value has changed since, like by the pending datapoint itself
 //   getting there. Null till then.
-// prev: {count, requestid, pin} as they were before the last tap, −1 or Clear,
-//   for UNDO to put back. Null when there's nothing to undo: at first, after an
-//   UNDO (which undoes only the last thing), and after a Submit (which can't be
-//   undone).
+// prev: what the last tap, −1, typed number or Clear changed, as it was before,
+//   for UNDO to put back: {count}, or, for a Clear, which also starts a new
+//   pending datapoint, {count, requestid, pin}. (Only what it changed, since a
+//   Submit can change the pin after a tap.) Null at first, after an UNDO (which
+//   undoes only the last thing), and once a Submit gets to Beeminder (which
+//   can't be undone, and which takes UNDO away from taps made while it was
+//   sending, too).
 // slug: the goal selected last, for when TallyBee's URL doesn't name one
-// (What TallyBee remembered before there was a prev, or anything else added
-// since, gets the value it would have at first.)
+// (What TallyBee remembered before there was a prev gets a prev of null.)
 function load() {
-  return valid({ count: 0, requestid: crypto.randomUUID(), pin: null, prev: null,
-                 slug: null, ...JSON.parse(localStorage.getItem('tallybee')) })
+  return valid({ prev: null, ...JSON.parse(localStorage.getItem('tallybee')) ??
+                 { count: 0, requestid: crypto.randomUUID(), pin: null, slug: null } })
 }
 
 // Throw unless t is something TallyBee can remember (see load); else return t
 function valid(t) {
-  const datapoint = p => Number.isInteger(p.count) &&
+  const datapoint = p => Number.isFinite(p.count) &&
                          typeof p.requestid === 'string' &&
                          (p.pin === null || typeof p.pin?.slug === 'string' &&
                                             Number.isFinite(p.pin.base))
-  beeminder.assert(datapoint(t) && (t.prev === null || datapoint(t.prev)) &&
+  beeminder.assert(datapoint(t) &&
+                   (t.prev === null || datapoint({ ...t, ...t.prev })) &&
                    (t.slug === null || typeof t.slug === 'string'),
                    JSON.stringify(t))
   return t
@@ -72,10 +76,11 @@ function fresh(t) {
 }
 
 // Change the pending datapoint with function f, like update does, first
-// remembering how it was, for UNDO (see prev)
-function change(f) {
+// remembering, for UNDO, how the fields named in keys, the ones f changes, were
+// (see prev)
+function change(keys, f) {
   update(t => {
-    t.prev = { count: t.count, requestid: t.requestid, pin: t.pin }
+    t.prev = Object.fromEntries(keys.map(k => [k, t[k]]))
     f(t)
   })
 }
@@ -93,6 +98,33 @@ let slug = new URLSearchParams(location.search).get('goal') ?? load().slug
 // opens whichever goal was selected last.)
 const goalurl = s =>
   location.pathname + (s === null ? '' : '?' + new URLSearchParams({ goal: s }))
+
+// The page's app manifest, which is what makes TallyBee installable as an app,
+// for this page's goal: an app installed from the page (or a home-screen icon
+// added from it) is named for the goal, and opens it. With no goal, it's named
+// TallyBee, like the page, and opens TallyBee's own URL. It's a data: URL, made
+// afresh when the page's goal changes (see loadGoals), so its URLs are
+// absolute, as a data: URL is no base for relative ones.
+function manifest() {
+  const url = u => new URL(u, location.href).href
+  const icon = (src, sizes, purpose) => ({ src: url(src), sizes, purpose,
+                                           type: 'image/png' })
+  const name = slug ?? document.title
+  return 'data:application/manifest+json,' + encodeURIComponent(JSON.stringify({
+    name,
+    short_name: name, // what Android shows under the icon
+    description: document.querySelector('meta[name=description]').content,
+    id: url(goalurl(slug)),
+    start_url: url(goalurl(slug)),
+    scope: url('/'),
+    display: 'standalone',
+    background_color: '#000000',
+    theme_color: document.querySelector('meta[name=theme-color]').content,
+    icons: [icon('icon-192.png', '192x192', 'any'),
+            icon('icon-512.png', '512x512', 'any'),
+            icon('icon-maskable.png', '512x512', 'maskable')],
+  }))
+}
 
 let goals = []   // the user's goals from Beeminder, once they've loaded
 let busy = false // whether we're waiting on Beeminder to take a datapoint
@@ -127,15 +159,16 @@ function render() {
   const g = goal(), t = load()
   $('count').textContent = t.count
   $('count').style.setProperty('--len', String(t.count).length)
-  $('num').textContent = value(g, t)
+  $('num').defaultValue = value(g, t) // shown when nothing's being typed there
   $('safesum').textContent = g.safesum
   $('safesum').setAttribute('aria-busy', g.queued) // grayed out: out of date
   $('subbut').disabled = busy || t.count === 0 || g === NOGOAL
   $('clearbut').disabled = busy
   $('undobut').disabled = busy || t.prev === null
   // Picking a goal loads another page, which wouldn't hear Beeminder's reply.
-  // And with no goals, like when logged out, there's nothing to pick.
-  $('goals').disabled = busy || goals.length === 0
+  // And with no goals, like when logged out, there's nothing to pick, or to
+  // type a number to send to.
+  $('goals').disabled = $('num').disabled = busy || goals.length === 0
   $('infinibee').hidden = !busy
   // Login button's label when not logged in (when logged
   // in it shows the username). graph.beeminder.com's login button says "Log in
@@ -161,7 +194,7 @@ function fail(err) {
 // Add d to the count, with a 25ms buzz like Beedroid (where the phone can
 // buzz: iPhones can't)
 function bump(d) {
-  change(t => { t.count += d })
+  change(['count'], t => { t.count = add(t.count, d) })
   navigator.vibrate?.(25)
 }
 
@@ -208,6 +241,7 @@ async function loadGoals() {
   $('goals').replaceChildren(...goals.map(g => new Option(g.slug)))
   $('goals').value = slug
   history.replaceState(null, '', goalurl(slug))
+  $('manifest').href = manifest()
   update(t => { t.slug = slug })
   poll()
 }
@@ -244,7 +278,7 @@ function submit() {
       g.queued = true // as Beeminder has it now, till the goals load again
       update(t => {
         beeminder.assert(t.requestid === requestid, OTHERWIN)
-        t.count -= n
+        t.count = add(t.count, -n)
         fresh(t)
         t.prev = null
       })
@@ -263,6 +297,9 @@ function submit() {
 // Count a tap when the finger (or nose) lifts, however long it was down, like
 // Beedroid does. With several fingers down at once, only the first one counts.
 $('bigbut').addEventListener('pointerup', e => { if (e.isPrimary) bump(1) })
+// A tap while a typed number waits for Enter takes the number first, and then
+// counts (see #num)
+$('bigbut').addEventListener('pointerdown', () => $('num').blur())
 $('bigbut').addEventListener('contextmenu', e => e.preventDefault())
 // On a keyboard, Space and Enter count, as they'd press any button, once per
 // press, however long the key is held (a held key repeats)
@@ -273,12 +310,26 @@ $('bigbut').addEventListener('keydown', e => {
 // right away, but with no ring around it till the keyboard moves the focus
 $('bigbut').focus({ focusVisible: false })
 $('minusbut').addEventListener('click', () => bump(-1))
+// A number typed where it says "Send N to", once Enter is pressed (or the field
+// is left), becomes the number to send: the count becomes that number, less
+// the base on an odometer-like goal (see livebase). It has to be written the
+// way JavaScript writes numbers, like 12 or -3 or 1.5 (so not "", "1e3", "05"
+// or ".5"). Either way, the field then shows the number to send again: the
+// form's reset puts back the field's default value, which render keeps up to
+// date, and which the field shows whenever nothing's being typed in it.
+$('num').addEventListener('change', () => {
+  const s = $('num').value
+  try {
+    beeminder.assert(String(Number(s)) === s, JSON.stringify(s))
+    change(['count'], t => { t.count = add(Number(s), -pinned(goal(), t).base) })
+  } finally { $('numform').reset() }
+})
 // Clearing the count also starts a new pending datapoint, so the next Submit
 // can't overwrite one that Beeminder got without our hearing back. It waits
 // its turn (see enqueue), like for another window to finish submitting, and so
 // does UNDO, which can bring back the datapoint that a Clear replaced.
-$('clearbut').addEventListener('click',
-  () => enqueue('shared', () => change(t => { t.count = 0; fresh(t) })))
+$('clearbut').addEventListener('click', () => enqueue('shared',
+  () => change(['count', 'requestid', 'pin'], t => { t.count = 0; fresh(t) })))
 $('undobut').addEventListener('click', () => enqueue('shared', () => update(t => {
   beeminder.assert(t.prev !== null, JSON.stringify({ prev: t.prev }))
   Object.assign(t, t.prev)
@@ -323,6 +374,10 @@ document.addEventListener('visibilitychange', () => {
 
 // Let TallyBee open with no connection (see sw.js), where browsers can
 navigator.serviceWorker?.register('sw.js')
+// Make TallyBee installable as an app (see manifest). The page starts with no
+// manifest, since Safari reads only the first one a page has.
+document.head.append(Object.assign(document.createElement('link'),
+                                   { id: 'manifest', rel: 'manifest', href: manifest() }))
 
 update(t => { t.slug = slug }) // this page's goal is now the one selected last
 // Log in with what Beeminder just sent us, if anything. Then load the goals,

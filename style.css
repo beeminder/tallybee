@@ -5,10 +5,10 @@
    before, is Bootstrap's), a shade darker on hover and another when pressed.
    The footer, its hairline, its buttons' fill (a shade lighter on hover), the
    secondary text, and the green are Apple's dark-mode system colors, and the
-   text, the pressed fill, and the red are close to theirs. The blue is the old
-   pure blue (#0000ff) made lighter at the same hue (in OKLCH): pure blue on
-   black has a contrast of 2.4:1, short of the 3:1 that WCAG asks of even big
-   text, and this has 5.1:1. It colors the count and the ring that shows where
+   text, the pressed fill, and the red are close to theirs. The blue is the
+   blue of the tally marks in TallyBee's icon (tally-strike@2x.png), with a
+   contrast of 4.48:1 on black, over the 3:1 that WCAG asks of big text (pure
+   blue, #0000ff, has 2.4:1). It colors the count and the ring that shows where
    the keyboard's focus is. What's grayed out is at 38% opacity. */
 :root {
   --yellow: #ffcb06; /* Beeminder yellow */
@@ -21,9 +21,12 @@
   --fill-press: #58585c;
   --text: #f2f2f7;
   --text2: #98989f;
-  --blue: #3a73ff;
+  --blue: #2e6bf0;
   --green: #30d158;
   --red: #ff453a;
+  --red-line: rgb(255 69 58 / 0.55); /* --red, faint, and fainter still: */
+  --red-hover: rgb(255 69 58 / 0.06);
+  --red-press: rgb(255 69 58 / 0.1);
   --grayed: 0.38;
 }
 
@@ -126,8 +129,8 @@ body {
   line-height: 1.25;
 }
 .footer > * { flex-basis: 100%; }
-.footer > div:has(#subbut) { flex: 3 1 260px; }
-.footer > div:has(#loginbut) { flex: 1 1 220px; }
+.footer > div:has(#subbut) { flex: 3 1 290px; }
+.footer > div:has(#loginbut) { flex: 1 1 190px; }
 .footer > div + div { margin-top: 12px; }
 
 /* Each row is a line of controls, which wrap only if they must, like when
@@ -151,8 +154,9 @@ body {
 #status[data-kind=ok]   { color: var(--green); }
 #status[data-kind=err]  { color: var(--red); }
 
-.footer button, .footer select {
+.footer button, .footer select, .footer input {
   appearance: none;
+  box-sizing: border-box; /* what text fields don't have, unlike the rest */
   min-width: 44px;
   min-height: 44px;
   padding: 0 12px;
@@ -168,8 +172,8 @@ body {
 
 /* Grayed out: whatever can't be used now, at once, with no fade */
 .footer :disabled { opacity: var(--grayed); transition: none; }
-/* "Send N to" grays out along with the dropdown it labels */
-.footer label:has(+ :disabled) { opacity: var(--grayed); }
+/* "Send" and "to" gray out along with the dropdown they name */
+.footer > div:has(> #goals:disabled) > span { opacity: var(--grayed); }
 
 /* The login button (the username, once logged in) starts the last row, where
    its label for when logged out has the most room. On a narrow phone, that
@@ -191,15 +195,16 @@ body {
   font-weight: 600;
 }
 
-/* Clear, which can't be undone, stands apart, at the left, and looks it: red,
-   Apple's color for buttons that destroy something, and outlined rather than
-   filled, like no other button. (Red on the other buttons' gray would be too
-   faint to read, hence its faint red hover and pressed colors, below.) */
+/* Clear, which wipes out the count (only an UNDO right after it can bring it
+   back), stands apart, at the left, and looks it: red, Apple's color for
+   buttons that destroy something, and outlined rather than filled, like no
+   other button. (Red on the other buttons' gray would be too faint to read,
+   hence its faint red hover and pressed colors, below.) */
 #clearbut {
   margin-right: auto;
   color: var(--red);
   background-color: transparent;
-  border-color: rgb(255 69 58 / 0.55); /* --red, faint */
+  border-color: var(--red-line);
 }
 
 #goals { /* the first thing to get squeezed */
@@ -216,9 +221,17 @@ body {
   text-overflow: ellipsis;
 }
 
-/* The number Submit sends, in semibold, with digits all as wide, so that less
-   moves as it changes */
-#num { font-weight: 600; font-variant-numeric: tabular-nums; }
+/* The number Submit sends, which can be typed too: in semibold, with digits
+   all as wide, so that less moves as it changes, in a field as wide as four of
+   them. Its form is only there to put back the number after typing, and
+   takes no room. */
+#num {
+  width: calc(4ch + 24px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+#numform { display: contents; }
 
 /* Submit, the one primary action, is the one yellow button, when it can
    send: grayed out, it's gray like the rest */
@@ -243,12 +256,12 @@ body {
 @media (hover: hover) {
   .footer :is(button, select):enabled:hover { background-color: var(--fill-hover); }
   #subbut:enabled:hover { background-color: var(--yellow-hover); }
-  #clearbut:enabled:hover { background-color: rgb(255 69 58 / 0.06); }
+  #clearbut:enabled:hover { background-color: var(--red-hover); }
   .close:hover { background-color: rgb(0 0 0 / 0.08); }
 }
 .footer :is(button, select):enabled:active { background-color: var(--fill-press); transition: none; }
 #subbut:enabled:active { background-color: var(--yellow-press); }
-#clearbut:enabled:active { background-color: rgb(255 69 58 / 0.1); }
+#clearbut:enabled:active { background-color: var(--red-press); }
 .close:active { background-color: rgb(0 0 0 / 0.16); transition: none; }
 :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 /* The big button fills the screen's width, so its ring goes just inside it */

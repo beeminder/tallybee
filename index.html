@@ -9,11 +9,10 @@
 <!-- Dark, for what the browser draws itself, like the page before style.css
      loads, and the dropdown's list of goals -->
 <meta name="color-scheme" content="dark">
-<!-- Icons for browser tabs and home screens, and what makes TallyBee
-     installable as an app (see icons.sh) -->
+<!-- Icons for browser tabs and home screens (see icons.sh). What makes TallyBee
+     installable as an app, its manifest, script.js adds, for the page's goal. -->
 <link rel="icon" href="icon-192.png" type="image/png" sizes="192x192">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
-<link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#000000">
 <!-- For search results and link previews. The description is the help text's
      second and third sentences. -->
@@ -59,11 +58,18 @@
 <button id="infobut" aria-label="Help">?</button>
 </div>
 <div>
-<!-- "Send N to" is the dropdown's label: it grays out along with the dropdown,
-     and screen readers call the dropdown by it. The dropdown and Submit start
-     out grayed out, so that they never look usable before script.js runs. -->
-<label for="goals">Send <span id="num">0</span> to </label>
-<select name="goals" id="goals" disabled></select>
+<!-- "Send N to" is what screen readers call the dropdown, and it grays out
+     along with the dropdown. N, the number that Submit sends, can be typed as
+     well as tapped out (see script.js); its form is there only so that the
+     number can be put back after typing. The dropdown, N and Submit start out
+     grayed out, so that they never look usable before script.js runs. -->
+<span id="sendword">Send</span>
+<form id="numform" method="dialog"><input id="num" value="0"
+  aria-labelledby="sendword" inputmode="decimal" autocomplete="off"
+  spellcheck="false" enterkeyhint="done" disabled></form>
+<span id="toword">to</span>
+<select name="goals" id="goals" aria-labelledby="sendword num toword"
+  disabled></select>
 <button id="subbut" disabled>Submit</button>
 </div>
 <div>
