@@ -8,6 +8,8 @@ https://tallybee.beeminder.com
 
 3. How can we test this in dev without it redirecting to prod?
 
+4. Infinite undo, in case that ever matters?
+
 ## Open questions
 
 1. Should TallyBee remember a separate count per goal?
