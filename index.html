@@ -63,10 +63,8 @@
 <!-- The comment that goes with the pending datapoint. Enter, the phone
      keyboard's done key, puts the keyboard away (see script.js). Like N, it
      starts out grayed out, so that nothing typed in it before script.js runs
-     gets lost.
-     TODO: English for: the field's name for screen readers, like "Comment",
-     and what it says while empty, like "Comment (optional)" -->
-<input id="comment" aria-label="Commentarium" placeholder="Commentarium (si vis)"
+     gets lost. -->
+<input id="comment" aria-label="Comment" placeholder="Comment (optional)"
   autocomplete="off" enterkeyhint="done" disabled>
 <button id="infobut" aria-label="Help">?</button>
 </div>
@@ -101,10 +99,8 @@
 <button id="undobut" disabled>UNDO</button>
 <button id="subbut" disabled>Submit</button>
 <!-- The fold button: a chevron that points up while the drawer is folded
-     away, and down (see style.css) while it shows.
-     TODO: English for: the button's name for screen readers, like "More
-     controls" (they also hear whether it's expanded, from aria-expanded) -->
-<button id="foldbut" aria-label="Plura" aria-expanded="true"
+     away, and down (see style.css) while it shows. -->
+<button id="foldbut" aria-label="More" aria-expanded="true"
   aria-controls="drawer sendrow"><svg viewBox="0 0 16 16" width="16" height="16"
   fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
   stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5l5-5 5 5"/></svg></button>
