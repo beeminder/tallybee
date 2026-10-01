@@ -40,3 +40,33 @@ I'm tentatively retiring the following rules that seem unncessary for Fable and 
 
 
 # Agent Scratchpad (human edits only above this line)
+
+## Questions from Opus (2026-10-01)
+
+In dev now: the folding footer, the comment field, the username as plain text. Answer inline (y/n/words), or write "defaults" to take every rec.
+
+1. Tapping the black area to put the keyboard away after typing a number counts one (130 sends 131). Make that tap not count? Rec: yes (one new if).
+2. Type something rejected, like "2,5", then tap Submit: it sends the old count and says it succeeded. Keep the rejected text in the field with its error, and have Submit refuse until it's fixed? Rec: yes (changes one qual).
+3. The folded summary ("Send 12 t…") is cut off on every phone. Drop it? Rec: yes.
+4. "via TallyBee [timestamp]" (your open q 2): drop it? Catch: without the timestamp, a resend after a lost reply is identical, and Beeminder answers "Duplicate request", which TallyBee would then have to treat as success (one new branch). Rec: drop.
+5. "Send" and "to" (your wishlist 6): drop? The dropdown then needs a screen-reader name (Latin till you give English). Rec: drop.
+6. The footer's top row, where a slightly low nose lands, holds Clear and, logged out, the login button. Put only the safesum and the ? there (the ? back at the top right) and move Clear and login a row down? Rec: yes.
+7. After a 401, Submit stays yellow but only repeats the error, and folded, "Try logging in again here." points at a hidden button. Gray out Submit and show the footer unfolded while logged out? Rec: yes (two new ifs).
+8. Footer trade-offs not yet put to you: unfolded, the big button loses 56–84px on phones; a first visit starts unfolded; folding applies to all windows; Clear and a successful Submit empty the comment. Accept, and cap the unfolded part at about half the screen so 200% text leaves room to tap? Rec: yes.
+9. Clear at 0: gray it out, so a double Clear can't wipe out what UNDO could bring back? Rec: yes.
+10. Typing the number logged out or offline (your wishlist 2): with no goal loaded there's no odometer base, so 130 typed for a goal at 120 would send 250. Keep the number grayed out till the goals load (the comment stays editable)? Rec: yes.
+11. An iPhone's decimal keypad has no minus key, and comma-decimal regions type a comma, which gets rejected. Keep that keypad? Rec: yes.
+12. Per-goal counts (your open q 1): all per-goal icons share one count, so a count started for pushups shows up under the situps icon, and Submit would send it there. A separate count, comment and UNDO per goal? Rec: yes (the biggest change here).
+13. On a weak signal TallyBee waits 30+ seconds for the network instead of opening from its saved copy. Open from the copy and update in the background (a new version then shows up one visit late)? Rec: yes (changes one qual).
+14. A link to a goal you don't have (a typo, or a renamed goal) shows no error and becomes the remembered goal. Show an error? Rec: yes (changes one qual).
+15. Two TallyBee windows at once can lose a tap (59 of 60 in a test). Stop rewriting all saved state on each goals load? Cost: a goal TallyBee picks by itself isn't remembered for the plain URL. Rec: yes.
+16. The status line: a failed follow-up goals check replaces the success message, checks stop after one failure, and errors never clear. Leave all that? Rec: yes (clearing errors automatically could hide a failed Submit).
+17. iPhone home-screen icons each need their own login, and each login logs the others and Safari out (Beeminder keeps one token per app). Accept for now? Rec: yes (the real fix is on Beeminder's server).
+18. Android, for goals beyond the one installed app: a standalone app per goal (a 404-page hack plus an install button) or Chrome-tab shortcuts? Rec: shortcuts.
+19. Accessibility: UNDO from the keyboard returns the focus to the big button; mouse clicks stop taking Space and Enter away from counting; screen readers announce the count after −1, UNDO or Clear; the big button gets your help sentence "Just tap/click your screen to keep count of something." as its description. All four? Rec: yes.
+20. Accept as is: Clear's weaker pressed look; taps made during a Submit can't be undone; UNDO in a second window during a Submit shows a raw error; values of 10^15 and up get rounded; Ctrl, Cmd and Alt+Enter count; older browsers ring the big button from page load. Rec: yes.
+21. Testing a local copy (your wishlist 3): add a code comment with the recipe (copy the live site's beeminder-token into localhost's storage), no code change? Rec: yes.
+22. GitHub Pages serves AGENTS.md, quals.js, sourcery.html, package.json, icons.sh and two 2.2 MB PNGs along with the app. Fine? Rec: yes.
+23. Names: folded, #foldbut, comment, #drawer, #bar, #sendrow, change(), prev. OK? Rec: yes.
+24. English, whenever you like, for: the comment field's name "Commentarium" (like "Comment"), its placeholder "Commentarium (si vis)" (like "Comment (optional)"), and the fold button's name "Plura" (like "More").
+25. Have you seen the VS Code privacy prompt since about 15:30 yesterday, when agents were limited to Chrome?

@@ -33,17 +33,24 @@ window.addEventListener('unhandledrejection', e => fail(e.reason))
 //   value was built on, so that a resend is the same datapoint even if the
 //   goal's value has changed since, like by the pending datapoint itself
 //   getting there. Null till then.
+// comment: what the user typed to go with the pending datapoint (see submit),
+//   like "felt strong", or empty for nothing
 // prev: what the last tap, −1, typed number or Clear changed, as it was before,
 //   for UNDO to put back: {count}, or, for a Clear, which also starts a new
-//   pending datapoint, {count, requestid, pin}. (Only what it changed, since a
-//   Submit can change the pin after a tap.) Null at first, after an UNDO (which
-//   undoes only the last thing), and once a Submit gets to Beeminder (which
-//   can't be undone, and which takes UNDO away from taps made while it was
-//   sending, too).
+//   pending datapoint, {count, requestid, pin, comment}, or, for an edit of the
+//   comment, {comment}. (Only what it changed, since a Submit can change the
+//   pin after a tap.) Null at first, after an UNDO (which undoes only the last
+//   thing), and once a Submit gets to Beeminder (which can't be undone, and
+//   which takes UNDO away from taps made while it was sending, too).
 // slug: the goal selected last, for when TallyBee's URL doesn't name one
+// folded: whether the footer is folded, all but the bar (see #drawer in
+//   index.html). Only the fold button changes it.
 // (What TallyBee remembered before there was a prev gets a prev of null.)
+// (And what it remembered before there were comments, or folding, gets no
+// comment, unfolded.)
 function load() {
-  return valid({ prev: null, ...JSON.parse(localStorage.getItem('tallybee')) ??
+  return valid({ prev: null, comment: '', folded: false,
+                 ...JSON.parse(localStorage.getItem('tallybee')) ??
                  { count: 0, requestid: crypto.randomUUID(), pin: null, slug: null } })
 }
 
@@ -52,10 +59,12 @@ function valid(t) {
   const datapoint = p => Number.isFinite(p.count) &&
                          typeof p.requestid === 'string' &&
                          (p.pin === null || typeof p.pin?.slug === 'string' &&
-                                            Number.isFinite(p.pin.base))
+                                            Number.isFinite(p.pin.base)) &&
+                         typeof p.comment === 'string'
   beeminder.assert(datapoint(t) &&
                    (t.prev === null || datapoint({ ...t, ...t.prev })) &&
-                   (t.slug === null || typeof t.slug === 'string'),
+                   (t.slug === null || typeof t.slug === 'string') &&
+                   typeof t.folded === 'boolean',
                    JSON.stringify(t))
   return t
 }
@@ -69,10 +78,11 @@ function update(f) {
   render()
 }
 
-// Start a new pending datapoint (see requestid and pin)
+// Start a new pending datapoint (see requestid and pin), with no comment
 function fresh(t) {
   t.requestid = crypto.randomUUID()
   t.pin = null
+  t.comment = ''
 }
 
 // Change the pending datapoint with function f, like update does, first
@@ -163,8 +173,17 @@ function render() {
   $('safesum').textContent = g.safesum
   $('safesum').setAttribute('aria-busy', g.queued) // grayed out: out of date
   $('subbut').disabled = busy || t.count === 0 || g === NOGOAL
-  $('clearbut').disabled = busy
+  $('clearbut').disabled = $('comment').disabled = busy
+  // (Setting it to what it says already, as after each keystroke, leaves the
+  // cursor where it is)
+  $('comment').value = t.comment
   $('undobut').disabled = busy || t.prev === null
+  // Folded, the gist, in the send row's own words, takes the send row's place
+  $('drawer').hidden = $('sendrow').hidden = t.folded
+  $('gist').hidden = !t.folded
+  $('gist').textContent = [$('sendword').textContent, value(g, t),
+                           $('toword').textContent, g.slug].join(' ')
+  $('foldbut').setAttribute('aria-expanded', !t.folded)
   // Picking a goal loads another page, which wouldn't hear Beeminder's reply.
   // And with no goals, like when logged out, there's nothing to pick, or to
   // type a number to send to.
@@ -174,6 +193,10 @@ function render() {
   // in it shows the username). graph.beeminder.com's login button says "Log in
   // with your Beeminder account".
   $('loginbut').textContent = beeminder.getUsername() ?? 'Log in with your Beeminder account'
+  // Logged in, it only says who's logged in: pressing it would log in again,
+  // which gets a new token, and so logs TallyBee out on your other devices
+  // (Beeminder keeps one token per app)
+  $('loginbut').disabled = Boolean(beeminder.getUsername())
 }
 
 // Show message msg in the status line, styled according to kind: busy, ok, err
@@ -205,12 +228,12 @@ function bump(d) {
 // fetch are never older than datapoints we've sent, no window submits, clears,
 // or undoes a datapoint that another is sending, and Clear and UNDO don't wait
 // for goals to load (unless a send is waiting for them too).
-// An error doesn't stall things; it gets thrown again outside, to show up in
-// the status line like any other. (The browser lets go of the lock if a window
-// closes.)
+// An error doesn't stall things: the lock goes to what's next, and the error,
+// which nothing here catches, shows up in the status line like any other (see
+// the unhandledrejection listener). (The browser lets go of the lock if a
+// window closes.)
 function enqueue(mode, f) {
   navigator.locks.request('tallybee', { mode }, f)
-                 .catch(e => queueMicrotask(() => { throw e }))
 }
 
 // If Beeminder is updating this page's goal (see NOGOAL), load the goals again
@@ -249,8 +272,11 @@ async function loadGoals() {
 // Send the count, as it was when Submit got pressed, to Beeminder as a
 // datapoint on this page's goal. Submit stays grayed out till Beeminder replies,
 // but taps keep counting meanwhile, for next time.
+// The comment that goes with it, too, is the one from when Submit got pressed:
+// the user's, as typed, and then which app sent it, and when. (A space goes
+// between the two, so there's none with no comment.)
 function submit() {
-  const { count: n, requestid } = load()
+  const { count: n, requestid, comment } = load()
   busy = true
   // status line while waiting for Beeminder to take the datapoint
   say('busy', 'Submitting…')
@@ -268,7 +294,8 @@ function submit() {
       })
       const t = load()
       const dp = await beeminder.addDatapoint(g.slug, add(n, t.pin.base),
-        `via TallyBee at ${new Date()}`, t.requestid).catch(e => {
+        `${comment}${comment === '' ? '' : ' '}via TallyBee at ${new Date()}`,
+        t.requestid).catch(e => {
           // Beeminder turned this send away for want of a login it accepts, so
           // the datapoint didn't get there this time, and gets no pin from it
           if (e.message === beeminder.REAUTH) update(t => { t.pin = pin })
@@ -296,10 +323,17 @@ function submit() {
 // Business logic: increment the number when you click the thing
 // Count a tap when the finger (or nose) lifts, however long it was down, like
 // Beedroid does. With several fingers down at once, only the first one counts.
-$('bigbut').addEventListener('pointerup', e => { if (e.isPrimary) bump(1) })
+// With a mouse, only its main button counts, not the right or middle one
+// (button 0, the one that a finger's touch counts as too).
+$('bigbut').addEventListener('pointerup', e => {
+  if (e.isPrimary && e.button === 0) bump(1)
+})
 // A tap while a typed number waits for Enter takes the number first, and then
 // counts (see #num)
 $('bigbut').addEventListener('pointerdown', () => $('num').blur())
+// A tap while the comment is being typed ends that edit first (see #comment),
+// and then counts, as a change of its own, for UNDO
+$('bigbut').addEventListener('pointerdown', () => $('comment').blur())
 $('bigbut').addEventListener('contextmenu', e => e.preventDefault())
 // On a keyboard, Space and Enter count, as they'd press any button, once per
 // press, however long the key is held (a held key repeats)
@@ -324,23 +358,48 @@ $('num').addEventListener('change', () => {
     change(['count'], t => { t.count = add(Number(s), -pinned(goal(), t).base) })
   } finally { $('numform').reset() }
 })
+// Enter, the phone keyboard's done key, also submits the number's form (to
+// nowhere), and that puts the keyboard away, as for the comment (see
+// #comment), so that putting it away takes no tap on the big button, which
+// would count
+$('numform').addEventListener('submit', () => $('num').blur())
 // Clearing the count also starts a new pending datapoint, so the next Submit
 // can't overwrite one that Beeminder got without our hearing back. It waits
 // its turn (see enqueue), like for another window to finish submitting, and so
 // does UNDO, which can bring back the datapoint that a Clear replaced.
 $('clearbut').addEventListener('click', () => enqueue('shared',
-  () => change(['count', 'requestid', 'pin'], t => { t.count = 0; fresh(t) })))
+  () => change(['count', 'requestid', 'pin', 'comment'], t => { t.count = 0; fresh(t) })))
 $('undobut').addEventListener('click', () => enqueue('shared', () => update(t => {
   beeminder.assert(t.prev !== null, JSON.stringify({ prev: t.prev }))
   Object.assign(t, t.prev)
   t.prev = null
 })))
+// Every keystroke in the comment gets remembered at once. One edit of it, from
+// when its field gets the focus till it loses it, is one change, for UNDO,
+// which puts back the comment as it was before the edit (see prev).
+let before // the comment as it was when its field got the focus, while it has it
+$('comment').addEventListener('focus', () => { before = load().comment })
+$('comment').addEventListener('blur', () => { before = undefined })
+$('comment').addEventListener('input', () => update(t => {
+  beeminder.assert(typeof before === 'string', JSON.stringify({ before: typeof before }))
+  t.prev = { comment: before }
+  t.comment = $('comment').value
+}))
+// Enter, the phone keyboard's done key, ends the edit and puts the keyboard
+// away, so that putting it away takes no tap on the big button, which would
+// count. (Not the Enter that settles a word typed with an IME, like in
+// Japanese.)
+$('comment').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.isComposing) $('comment').blur()
+})
+// The fold button folds away the drawer and the send row, or brings them back
+$('foldbut').addEventListener('click', () => update(t => { t.folded = !t.folded }))
 $('subbut').addEventListener('click', submit)
 $('goals').addEventListener('change',
                             () => location.replace(goalurl($('goals').value)))
 // The login button sends you to Beeminder, which sends you right back (with an
 // access token) if you've authorized TallyBee before. When you're logged in, it
-// shows your username, and pressing it logs you in again, like as someone else.
+// shows your username instead, and can't be pressed (see render).
 $('loginbut').addEventListener('click',
                                () => beeminder.login(clientId, redirectUri))
 $('infobut').addEventListener('click', () => $('info').showModal())
@@ -353,9 +412,10 @@ $('info').querySelector('.modal-content')
 // while something is listening for touches, so this listens, and does nothing
 document.body.addEventListener('touchstart', () => {}, { passive: true })
 // Show what other TallyBee tabs and icons change, like their taps. When one
-// logs in or out, or gets a datapoint to Beeminder (which starts a new pending
-// datapoint, and can change an odometer goal's value), load the goals again
-// too. (Not on every change: loading the goals changes what's remembered, which
+// logs in or out, or changes which datapoint is pending (see requestid), as a
+// Submit that gets to Beeminder does (which can change an odometer goal's
+// value), and so do a Clear and the UNDO of one, load the goals again too.
+// (Not on every change: loading the goals changes what's remembered, which
 // would set off the other windows, and so on forever.)
 window.addEventListener('storage', e => {
   render()
@@ -364,13 +424,15 @@ window.addEventListener('storage', e => {
     refresh()
 })
 // Load the goals, when logged in: when the page loads, and again when you come
-// back to TallyBee, to refresh things like their safesums
+// back to TallyBee, to refresh things like their safesums, and when the
+// connection comes back, as after TallyBee opened with none (see sw.js)
 function refresh() {
   if (beeminder.getUsername()) enqueue('shared', loadGoals)
 }
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) refresh()
 })
+window.addEventListener('online', refresh)
 
 // Let TallyBee open with no connection (see sw.js), where browsers can
 navigator.serviceWorker?.register('sw.js')

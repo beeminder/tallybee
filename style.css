@@ -107,7 +107,10 @@ body {
   text-box: trim-both cap alphabetic;
 }
 
-/* The footer: a status line, empty at first, over three rows of controls, on
+/* What's hidden stays hidden, even what gets a display of its own below */
+[hidden] { display: none !important; }
+
+/* The footer: a status line, empty at first, over rows of controls, on
    a 4px grid: 16px margins, 12px between rows, 8px between neighbors, and
    controls 44px tall, the smallest touch target Apple recommends. The 16px on
    top keep the controls out of reach of touches at the very bottom of the big
@@ -115,12 +118,15 @@ body {
    finger's width of it (in Chrome, up to 16px away). The big button, which
    can take the keyboard's focus, counts as clickable too, so a touch just
    below it, in the top of the footer, counts. Where there's room for both,
-   the send row and the last row share a line, leaving more of a landscape
-   phone for tapping. The rows are at most 800px wide, centered. */
+   two rows share a line (see #drawer and #bar), leaving more of a landscape
+   phone for tapping. The rows are at most 800px wide, centered. The footer is
+   never taller than the screen: where it would be, as on a small phone with
+   its text made huge, what's above the bar scrolls, so that the bar, fold
+   button and all, stays on the screen. */
 .footer {
   display: flex;
-  flex-wrap: wrap;
-  column-gap: 24px;
+  flex-direction: column;
+  min-height: 0; /* so that it can be squeezed to fit the screen */
   padding: 16px max(16px, 50% - 400px); /* room at the bottom for the versiontag */
   border-top: 1px solid var(--line);
   background-color: var(--surface);
@@ -128,15 +134,51 @@ body {
   font-size: 16px;
   line-height: 1.25;
 }
-.footer > * { flex-basis: 100%; }
-.footer > div:has(#subbut) { flex: 3 1 290px; }
-.footer > div:has(#loginbut) { flex: 1 1 190px; }
-.footer > div + div { margin-top: 12px; }
+
+/* The drawer takes two rows, Clear's over the comment's, and the bar two, the
+   send row over the rest; where there's room, as on a phone turned sideways,
+   each takes one line, leaving more of the screen for tapping. The send row
+   is at least as wide as its words, number, and dropdown at its narrowest, so
+   that it never takes two lines of its own beside the rest. The rest of the
+   bar keeps to the right, so that it's in the same place whether the send row
+   shares its line, or has one of its own, or is folded away. The drawer's 4px
+   all around, which its margins take back, are room for the rings that show
+   where the keyboard's focus is, since it cuts off whatever sticks out of it
+   once it can scroll, and its scroll padding keeps that room when the
+   keyboard's focus scrolls a control into view. */
+#drawer, #bar { display: flex; flex-wrap: wrap; }
+#drawer { gap: 12px 24px; overflow-y: auto; padding: 4px; margin: -4px -4px 8px;
+          scroll-padding: 4px; }
+#bar { gap: 12px 8px; }
+#drawer > div { flex: 1 1 245px; }
+#sendrow { flex: 1 1 230px; }
+#bar > div:last-child {
+  max-width: 100%; /* so that the gist before it never puts it on a line of its own */
+  margin-left: auto;
+  justify-content: flex-end;
+}
+
+/* The gist, while the send row is folded away, takes the room that the rest
+   of the bar leaves on its line, cut short (…) if need be, but none of the
+   room the rest needs: it can shrink to nothing, and its margin takes back
+   the 8px gap between it and the rest, while its indent puts its words back
+   at the bar's left edge. So the gist never moves a control, and where the
+   rest of the bar takes two lines of its own, it's cut short to nothing. */
+#gist {
+  flex: 1 1 0;
+  min-width: 0;
+  margin-left: -8px;
+  text-indent: 8px;
+  align-self: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Each row is a line of controls, which wrap only if they must, like when
    zoomed way in. (Else the dropdown, as wide as its longest goal, would set
    how narrow the row can get, hence the min-width.) */
-.footer > div {
+#drawer > div, #bar > div {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -169,22 +211,35 @@ body {
   user-select: none;
   transition: background-color 120ms ease-out, opacity 120ms ease-out;
 }
+/* But what's typed in a text field can be selected, as in any field (and
+   iPhones are said to let nothing be typed in a field that can't be) */
+.footer input { -webkit-user-select: text; user-select: text; }
 
 /* Grayed out: whatever can't be used now, at once, with no fade */
 .footer :disabled { opacity: var(--grayed); transition: none; }
-/* "Send" and "to" gray out along with the dropdown they name */
-.footer > div:has(> #goals:disabled) > span { opacity: var(--grayed); }
+/* "Send" and "to" gray out along with the dropdown they name, and so does the
+   gist, which says them too */
+#bar:has(#goals:disabled) span { opacity: var(--grayed); }
 
-/* The login button (the username, once logged in) starts the last row, where
-   its label for when logged out has the most room. On a narrow phone, that
-   label takes two lines rather than getting cut off. */
+/* The login button (the username, once logged in) follows Clear. Where the
+   row is too narrow for its label for when logged out, that label takes two
+   lines beside Clear, rather than a line of its own, or getting cut off: it
+   can squeeze down to its longest word (min-content), and grows as wide as
+   the whole label where there's room. A username, all one word, squeezes not
+   at all: the safesum goes below it first. Only where even the username
+   alone won't fit does it break, to stay whole on the screen. */
 #loginbut {
+  flex: 1 1 min-content;
+  max-width: max-content;
   min-width: 0;
   padding-block: 10px; /* for when its label takes two lines */
   white-space: normal;
   text-wrap: balance;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
+/* Logged in, it can't be pressed, and it's plain text, the username, not a
+   grayed-out button */
+#loginbut:disabled { opacity: 1; background-color: transparent; }
 
 #infobut { /* the help button, round, at the right */
   flex: none;
@@ -195,13 +250,32 @@ body {
   font-weight: 600;
 }
 
+/* The fold button, at the right of the bar, is round too, being as small as
+   a control can be: 44px wide, with 22px corners. Its chevron points up, to
+   where the drawer would show, while it's folded away, and turns over to
+   point down while it shows. For people who ask their device for less
+   motion, it flips without turning. */
+#foldbut svg { display: block; margin: auto; transition: rotate 200ms ease-out; }
+#foldbut[aria-expanded=true] svg { rotate: 180deg; }
+@media (prefers-reduced-motion: reduce) { #foldbut svg { transition: none; } }
+
+/* The comment looks like a field, not a button: a well, black like the big
+   button, with a hairline around it, and gray words in it while it's empty,
+   in the buttons' capsule shape. Its 16px text keeps iPhones from zooming in
+   when it gets the focus. */
+#comment {
+  flex: 1 1 0; /* the room the ? leaves */
+  border-color: var(--line);
+  background-color: black;
+}
+#comment::placeholder { color: var(--text2); opacity: 1; }
+
 /* Clear, which wipes out the count (only an UNDO right after it can bring it
    back), stands apart, at the left, and looks it: red, Apple's color for
    buttons that destroy something, and outlined rather than filled, like no
    other button. (Red on the other buttons' gray would be too faint to read,
    hence its faint red hover and pressed colors, below.) */
 #clearbut {
-  margin-right: auto;
   color: var(--red);
   background-color: transparent;
   border-color: var(--red-line);
@@ -209,7 +283,7 @@ body {
 
 #goals { /* the first thing to get squeezed */
   flex: 1 1 0; /* the room the rest of the row leaves, goals or no goals */
-  min-width: 5em; /* short of that, Submit goes on a line of its own */
+  min-width: 5em; /* short of that, it goes on a line of its own */
   padding: 0 26px 0 12px;
   /* Up-and-down chevrons, like those of Apple's pop-up buttons, as far from
      the right edge as the goal is from the left one, in longhands so that
@@ -223,8 +297,8 @@ body {
 
 /* The number Submit sends, which can be typed too: in semibold, with digits
    all as wide, so that less moves as it changes, in a field as wide as four of
-   them. Its form is only there to put back the number after typing, and
-   takes no room. */
+   them. Its form is there to put back the number after typing, and for Enter
+   to put the keyboard away (see script.js), and takes no room. */
 #num {
   width: calc(4ch + 24px);
   font-weight: 600;
@@ -238,7 +312,7 @@ body {
 #subbut { flex: none; font-weight: 600; }
 #subbut:enabled { background-color: var(--yellow); color: black; }
 
-/* The goal's safesum fills the rest of the last row, wrapping beside the
+/* The goal's safesum fills the rest of Clear's row, wrapping beside the
    login button, or below it if that would leave it too narrow. With no goal,
    it's empty and takes no room. While Beeminder updates the goal, as after
    getting a datapoint, it's out of date, and grayed out. */

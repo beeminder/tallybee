@@ -29,7 +29,7 @@
 <meta name="twitter:card" content="summary_large_image">
 </head>
 <body>
-<div class='versiontag'>v2026.09.30b&nbsp;</div>
+<div class='versiontag'>v2026.10.01a&nbsp;</div>
 <!-- The big button is a button to the keyboard too: see script.js -->
 <div id="bigbut" role="button" tabindex="0"><span id="count">0</span></div>
 <!-- While we wait on Beeminder, the infinibee (Beeminder's bee logo, from
@@ -46,23 +46,43 @@
      control out from under the finger that just tapped it. Screen readers
      read out each new message. -->
 <span id="status" role="status"></span>
+<!-- The drawer: the controls that the fold button, at the right end of the
+     bar below, folds away and brings back (see script.js). The bar itself
+     never folds away, and never moves. -->
+<div id="drawer">
 <!-- Clear, which wipes out the count (though UNDO can bring it back), sits
-     apart from the rest. −1 takes one off, and UNDO undoes whatever was done
-     last: a tap, a −1, or a Clear (see script.js). -->
+     apart from the rest. -->
 <div>
 <!-- label for the button that zeroes the count without submitting it
      (Beedroid's is "Clear") -->
 <button id="clearbut">Clear</button>
-<button id="undobut" disabled>UNDO</button>
-<button id="minusbut">−1</button>
-<button id="infobut" aria-label="Help">?</button>
+<button id="loginbut"></button>
+<span id="safesum"></span>
 </div>
 <div>
+<!-- The comment that goes with the pending datapoint. Enter, the phone
+     keyboard's done key, puts the keyboard away (see script.js). Like N, it
+     starts out grayed out, so that nothing typed in it before script.js runs
+     gets lost.
+     TODO: English for: the field's name for screen readers, like "Comment",
+     and what it says while empty, like "Comment (optional)" -->
+<input id="comment" aria-label="Commentarium" placeholder="Commentarium (si vis)"
+  autocomplete="off" enterkeyhint="done" disabled>
+<button id="infobut" aria-label="Help">?</button>
+</div>
+</div> <!-- drawer -->
+<!-- The bar: all that a counting session needs. The send row is in the bar,
+     rather than in the drawer, so that where there's room it shares the bar's
+     line (see style.css), but it folds away along with the drawer, and the
+     gist, which says what it would, takes its place. -->
+<div id="bar">
+<div id="sendrow">
 <!-- "Send N to" is what screen readers call the dropdown, and it grays out
      along with the dropdown. N, the number that Submit sends, can be typed as
-     well as tapped out (see script.js); its form is there only so that the
-     number can be put back after typing. The dropdown, N and Submit start out
-     grayed out, so that they never look usable before script.js runs. -->
+     well as tapped out (see script.js); its form is there so that the number
+     can be put back after typing, and so that Enter, the phone keyboard's done
+     key, puts the keyboard away. The dropdown, N and Submit start out grayed
+     out, so that they never look usable before script.js runs. -->
 <span id="sendword">Send</span>
 <form id="numform" method="dialog"><input id="num" value="0"
   aria-labelledby="sendword" inputmode="decimal" autocomplete="off"
@@ -70,12 +90,26 @@
 <span id="toword">to</span>
 <select name="goals" id="goals" aria-labelledby="sendword num toword"
   disabled></select>
-<button id="subbut" disabled>Submit</button>
 </div>
+<!-- The gist: what the send row says, like "Send 12 to pushups", in words
+     only, for while the send row is folded away (see script.js) -->
+<span id="gist" hidden></span>
+<!-- −1 takes one off, and UNDO undoes whatever was done last: a tap, a −1, a
+     typed number, an edit of the comment, or a Clear (see script.js). -->
 <div>
-<button id="loginbut"></button>
-<span id="safesum"></span>
+<button id="minusbut">−1</button>
+<button id="undobut" disabled>UNDO</button>
+<button id="subbut" disabled>Submit</button>
+<!-- The fold button: a chevron that points up while the drawer is folded
+     away, and down (see style.css) while it shows.
+     TODO: English for: the button's name for screen readers, like "More
+     controls" (they also hear whether it's expanded, from aria-expanded) -->
+<button id="foldbut" aria-label="Plura" aria-expanded="true"
+  aria-controls="drawer sendrow"><svg viewBox="0 0 16 16" width="16" height="16"
+  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5l5-5 5 5"/></svg></button>
 </div>
+</div> <!-- bar -->
 </div> <!-- footer -->
 
 <dialog id="info" aria-labelledby="infotitle">
