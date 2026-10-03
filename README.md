@@ -4,6 +4,8 @@ https://tallybee.beeminder.com
 
 1. What we really need is a way to have an icon on your phone's homescreen that opens up TallyBee with a specific Beeminder goal selected.
 
+2. The footer got so cluttered. We could move more things to the help popup for starters?
+
 
 ## Open questions
 
