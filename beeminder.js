@@ -117,6 +117,16 @@ async function getGoals() {
     { signal: AbortSignal.timeout(PATIENCE) }), token);
 }
 
+// The user, as a Beeminder user object, like { username: 'alice', timezone:
+// 'America/New_York', ... }. The timezone is the one set on Beeminder, which,
+// with each goal's deadline, decides what day it is for the user's goals.
+async function getUser() {
+  const token = getToken();
+  return check(await fetch(`${API}users/me.json?` +
+    new URLSearchParams({ access_token: token }),
+    { signal: AbortSignal.timeout(PATIENCE) }), token);
+}
+
 // The datapoint added to the user's goal last, or undefined if it has none.
 // (A goal's last_datapoint, in what getGoals gets, is the one last added or
 // edited.) Beeminder sorts datapoints by when they were added unless told to
@@ -128,14 +138,15 @@ async function getLastAdded(goal) {
     { signal: AbortSignal.timeout(PATIENCE) }), token))[0];
 }
 
-// Add a datapoint to the user's goal and return the datapoint as Beeminder
-// saved it. The requestid makes resending the datapoint update it in place
-// rather than add a duplicate.
-async function addDatapoint(goal, value, comment, requestid) {
+// Add a datapoint to the user's goal, for the day with daystamp daystamp (like
+// 20261002), and return the datapoint as Beeminder saved it. The requestid
+// makes resending the datapoint update it in place rather than add a
+// duplicate.
+async function addDatapoint(goal, value, daystamp, comment, requestid) {
   const token = getToken();
   const url = `${API}users/me/goals/${goal}/datapoints.json`;
   return check(await fetch(url, { method: 'POST', body: new URLSearchParams(
-    { access_token: token, value, comment, requestid }),
+    { access_token: token, value, daystamp, comment, requestid }),
     signal: AbortSignal.timeout(PATIENCE) }), token);
 }
 
@@ -147,6 +158,7 @@ export {
   autoLogin,
   getUsername,
   getGoals,
+  getUser,
   getLastAdded,
   addDatapoint
 }
