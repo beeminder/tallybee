@@ -13,8 +13,12 @@ const redirectUri = "https://tallybee.beeminder.com/"
 // console on tallybee.beeminder.com, logged in, copy what
 // localStorage.getItem('beeminder-token') says, and on the copy, paste it into
 // localStorage.setItem('beeminder-token', ...) and reload. (Beeminder keeps one
-// token per app, so it's the same login in both. Pressing the login button on
-// the copy goes to the live TallyBee.)
+// token per app, so it's the same login in both: the copy's Submit sends
+// datapoints to your real goals. And the copy's login button, there once the
+// copy is logged out, logs you out everywhere: Beeminder makes a new token,
+// which stops the old one working on every device, and sends it to the live
+// TallyBee, which turns it away, as a login it didn't ask for: see UNASKED in
+// beeminder.js.)
 
 // What to tell the user when another TallyBee window (or tab, or home-screen
 // icon) changed the pending datapoint (see requestid, below) while this one was
@@ -119,23 +123,33 @@ function change(keys, f) {
 
 // An edit of a text field, the comment or the number to send, from when it
 // gets the focus till it loses it, is one change, for UNDO, which puts back
-// the fields named in keys as they were when the edit started. Each keystroke
-// gets remembered at once, with edited.
-let before // the fields the edit changes, as they were at its start, during it
-function edits(field, keys) {
-  field.addEventListener('focus', () => { before = pick(load(), keys) })
+// what it changed as it was just before the edit's first keystroke. (Not as it
+// was when the field got the focus, since another window can change it in
+// between, as by submitting it.) Each keystroke gets remembered at once, with
+// edited.
+// before: the pending datapoint (its requestid) for which the edit under way
+// has given UNDO a way back to before it: null from when the field gets the
+// focus till the edit's first keystroke, and again after an UNDO during the
+// edit (as when a button doesn't take the focus, like in Safari); undefined
+// between edits. So once another pending datapoint starts during the edit, as
+// when a Submit, from this window or another, gets to Beeminder (which takes
+// UNDO's way back away: see undos), the edit's next keystroke gives UNDO a way
+// back again.
+let before
+function edits(field) {
+  field.addEventListener('focus', () => { before = null })
   field.addEventListener('blur', () => { before = undefined })
 }
 
 // Change the pending datapoint with function f, for a keystroke in an edit
-// (see edits). UNDO gets a way back to the edit's start with the edit's first
-// keystroke, and again with the first after an UNDO during the edit (as when a
-// button doesn't take the focus, like in Safari), unless it already has one.
-function edited(f) {
+// (see edits) of the fields named in keys, first giving UNDO a way back to
+// before the edit, as they are, if it has none for this pending datapoint
+function edited(keys, f) {
+  beeminder.assert(before !== undefined, JSON.stringify({ before: typeof before }))
   update(t => {
-    beeminder.assert(before !== undefined, JSON.stringify({ before: typeof before }))
-    if (JSON.stringify(t.undos.at(-1)) !== JSON.stringify(before)) t.undos.push(before)
+    if (before !== t.requestid) t.undos.push(pick(t, keys))
     f(t)
+    before = t.requestid
   })
 }
 
@@ -288,27 +302,34 @@ const PLACEHOLDER = $('comment').placeholder
 // Make the page show the current state of things
 function render() {
   const g = goal(), t = load(), v = value(g, t)
+  const out = !beeminder.getUsername() // whether logged out
   // The big number is the number to send, always: the count, on a goal that
   // sums its datapoints, and on an odometer-like one, the reading
   $('count').textContent = v
   $('count').style.setProperty('--len', String(v).length)
   // The field says it too, even while it's being typed in, as what's typed
-  // there is the number to send at each keystroke (see #num)
-  $('num').value = v
+  // there is the number to send at each keystroke (see #num), but for a minus
+  // waiting there for its digits
+  $('num').value = minus ? '-' : v
   // As wide as what it says, typed or not (see style.css)
   $('num').style.setProperty('--len', $('num').value.length)
   $('safesum').textContent = g.safesum
   $('safesum').setAttribute('aria-busy', g.queued) // grayed out: out of date
   // The datapoint added to the goal last, as Beeminder's own site shows it:
-  // its day of the month, value, and comment, like 30 3 "set 1"
+  // its day of the month, value, and comment, if it has one, like 30 3 "set 1"
+  // (or, with none, 29 120)
   const dp = g.last_datapoint
-  $('lastdp').textContent =
-    dp === null ? '' : `${dp.daystamp.slice(6)} ${dp.value} "${dp.comment}"`
+  $('lastdp').textContent = dp === null ? '' : `${dp.daystamp.slice(6)} ${dp.value}` +
+    (dp.comment === '' ? '' : ` "${dp.comment}"`)
   // As in Beeminder's own form, the comment field shows the last comment
   $('comment').placeholder = (dp ?? { comment: PLACEHOLDER }).comment
   $('sigma').hidden = !g.kyoom
-  $('subbut').disabled = busy || g === NOGOAL
-  $('clearbut').disabled = $('comment').disabled = $('num').disabled = busy
+  // Logged out, as after Beeminder rejects our token, the goals can still be
+  // there, as they last loaded, but nothing can be sent to them
+  $('subbut').disabled = busy || g === NOGOAL || out
+  // With a tally of 0, there's nothing for Clear to clear
+  $('clearbut').disabled = busy || t.count === 0
+  $('comment').disabled = $('num').disabled = busy
   // (Setting it to what it says already, as after each keystroke, leaves the
   // cursor where it is)
   $('comment').value = t.comment
@@ -316,8 +337,13 @@ function render() {
     .map(([ds, k]) => new Option(dayname(ds, k), ds)))
   $('day').value = t.day ?? daystamp(g, 0)
   $('undobut').disabled = busy || t.undos.length === 0
-  $('drawer').hidden = $('sendrow').hidden = t.folded
-  $('foldbut').setAttribute('aria-expanded', !t.folded)
+  // Logged out, the footer shows unfolded, folded or not, as the login button
+  // is in the drawer; and the fold button, with nothing it can do then, is
+  // grayed out
+  const folded = t.folded && !out
+  $('drawer').hidden = $('sendrow').hidden = folded
+  $('foldbut').setAttribute('aria-expanded', !folded)
+  $('foldbut').disabled = out
   // Picking a goal loads another page, which wouldn't hear Beeminder's reply.
   // And with no goals, like when logged out, there's nothing to pick, and no
   // telling what day it is for the goal.
@@ -334,7 +360,7 @@ function render() {
   // Logged in, it only says who's logged in: pressing it would log in again,
   // which gets a new token, and so logs TallyBee out on your other devices
   // (Beeminder keeps one token per app)
-  $('loginbut').disabled = Boolean(beeminder.getUsername())
+  $('loginbut').disabled = !out
 }
 
 // Show message msg in the status line, styled according to kind: busy, ok, err
@@ -392,6 +418,9 @@ function dropdown() {
 // Get the user's goals, and the user, from Beeminder, keep them (see goals),
 // and put the goals in the dropdown, selecting this page's goal, or, the first
 // time, the most urgent one, and put it in the URL (see goalurl). Then poll.
+// If this page's goal is none of the user's (like from a typo in a link, or a
+// link to a goal since renamed), then, with no goal selected (see NOGOAL), say
+// so.
 async function loadGoals() {
   const [gs, u] = await Promise.all([beeminder.getGoals(), beeminder.getUser()])
   goalscheck(gs, u)
@@ -411,6 +440,8 @@ async function loadGoals() {
   $('manifest').href = manifest()
   update(t => { t.slug = slug })
   poll()
+  beeminder.assert(slug === null || g !== NOGOAL,
+                   `No such goal: "${slug}"`)
 }
 
 // Send the count, as it was when Submit got pressed, to Beeminder as a
@@ -499,15 +530,19 @@ $('minusbut').addEventListener('click', () => bump(-1))
 // number to send again. But a minus with no digits yet waits for them, till
 // the field is left (then it's undone too). So the field and the big number
 // never say different things, but for that minus.
-edits($('num'), ['count'])
+let minus = false // whether the field has a minus in it alone (see render)
+edits($('num'))
 $('num').addEventListener('input', () => {
   const s = $('num').value
-  if (s === '-') return
-  if (/^-?\d{0,15}$/.test(s))
-    edited(t => { t.count = add(Number(s || 0), -pinned(goal(), t).base) })
+  minus = s === '-'
+  if (/^(-?\d{1,15})?$/.test(s))
+    edited(['count'], t => { t.count = add(Number(s), -pinned(goal(), t).base) })
   else render()
 })
-$('num').addEventListener('change', render)
+$('num').addEventListener('blur', () => {
+  minus = false
+  render()
+})
 // Enter, the phone keyboard's done key, also submits the number's form (to
 // nowhere), and that puts the keyboard away, as for the comment (see
 // #comment), so that putting it away takes no tap on the big button, which
@@ -520,15 +555,20 @@ $('numform').addEventListener('submit', () => $('num').blur())
 $('clearbut').addEventListener('click', () => enqueue('shared',
   () => change(['count', 'requestid', 'pin', 'comment', 'day'],
                t => { t.count = 0; fresh(t) })))
-$('undobut').addEventListener('click', () => enqueue('shared', () => update(t => {
-  beeminder.assert(t.undos.length > 0, JSON.stringify({ undos: t.undos }))
-  Object.assign(t, t.undos.pop())
-})))
+// After an UNDO during an edit, the edit's next keystroke gives UNDO a way back
+// again (see edits)
+$('undobut').addEventListener('click', () => enqueue('shared', () => {
+  update(t => {
+    beeminder.assert(t.undos.length > 0, JSON.stringify({ undos: t.undos }))
+    Object.assign(t, t.undos.pop())
+  })
+  before &&= null
+}))
 // Every keystroke in the comment gets remembered at once. One edit of it is one
 // change, for UNDO (see edits).
-edits($('comment'), ['comment'])
-$('comment').addEventListener('input',
-                              () => edited(t => { t.comment = $('comment').value }))
+edits($('comment'))
+$('comment').addEventListener('input', () =>
+  edited(['comment'], t => { t.comment = $('comment').value }))
 // Picking a day is a change of its own, for UNDO
 $('day').addEventListener('change',
                           () => change(['day'], t => { t.day = $('day').value }))

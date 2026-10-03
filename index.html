@@ -29,11 +29,12 @@
 <meta name="twitter:card" content="summary_large_image">
 </head>
 <body>
-<div class='versiontag'>v2026.10.02a&nbsp;</div>
+<div class='versiontag'>v2026.10.03b&nbsp;</div>
 <!-- The big button is a button to the keyboard too: see script.js. Its number
      is script.js's to show: till then, it shows none, rather than one that may
-     be wrong, as on an odometer-like goal. -->
-<div id="bigbut" role="button" tabindex="0"><span id="count"></span></div>
+     be wrong, as on an odometer-like goal. Screen readers describe it in the
+     help's words (see #tapping). -->
+<div id="bigbut" role="button" tabindex="0" aria-describedby="tapping"><span id="count"></span></div>
 <!-- While we wait on Beeminder, the infinibee (Beeminder's bee logo, from
      beeminder.com/press) flies a lemniscate (a figure eight; see style.css),
      as on Beeminder's own site, on a canvas the shape of Beeminder's, 400 by
@@ -99,8 +100,9 @@
   disabled></form>
 <select name="goals" id="goals" aria-label="Beeminder goal" disabled></select>
 <!-- The goal's page on Beeminder, opening apart from TallyBee. With no goal,
-     it's no link, and grayed out. -->
-<a id="goallink" target="_blank" aria-label="Beeminder goal page">↗</a>
+     it's no link, and grayed out, and screen readers say nothing of it (its
+     name is for the link; its arrow is for the eye). -->
+<a id="goallink" target="_blank" aria-label="Beeminder goal page"><span aria-hidden="true">↗</span></a>
 </div>
 <!-- −1 takes one off, and UNDO undoes whatever was done last: a tap, a −1, a
      typed number, an edit of the comment, or a Clear (see script.js). -->
@@ -130,7 +132,7 @@
 <div class="modal-body">
 <p>
 This replicates the tally counter feature of Beedroid.
-Just tap/click your screen to keep count of something.
+<span id="tapping">Just tap/click your screen to keep count of something.</span>
 Our favorite use case: put your phone on the floor and count pushups by touching your nose to the screen.
 </p>
 <h2>Credits</h2>

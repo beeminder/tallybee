@@ -47,69 +47,91 @@ Answer inline (y/n/words), or write "defaults" to take every rec.
 
 1. Tapping the black area to put the keyboard away after typing a number counts one (130 sends 131). Make that tap not count? Rec: yes (one new if).
 DREEV: It doesn't feel totally wrong to me as is, and you can always hit Undo or "-1". Anti-magic should bias us against adding an if-statement for this. On the other hand, if it's thoroughly conventional to tap above the keyboard to make the keyboard go away and not have that tap treated as UI action, then we should follow that convention.
+OPUS (2026-10-03): Not a convention. On the web, Android and iOS alike, the tap that puts the keyboard away also acts on whatever it lands on (HTML's focusing steps; Android's IME docs). So, per your rule, nothing changed and no if was added.
 
 2. Type something rejected, like "2,5", then tap Submit: it sends the old count and says it succeeded. Keep the rejected text in the field with its error, and have Submit refuse until it's fixed? Rec: yes (changes one qual).
 DREEV: Yes, that's a bad bug, but I think it'll be moot after the doing the latest wishlist items in the README.
+OPUS (2026-10-03): Moot, as you expected: the field now refuses non-digits as they're typed, so Submit always sends what the field shows. But see N4 (a typed "." vanishes, so 72.5 becomes 725).
 
 3. The folded summary ("Send 12 t…") is cut off on every phone. Drop it? Rec: yes.
 DREEV: Sounds fine.
+OPUS (2026-10-03): Done in Logan's session: no folded summary.
 
 4. "via TallyBee [timestamp]" (your open q 2): drop it? Catch: without the timestamp, a resend after a lost reply is identical, and Beeminder answers "Duplicate request", which TallyBee would then have to treat as success (one new branch). Rec: drop.
 DREEV: Hmm. Tricky stuff. More detail added in the open question in the README.
+OPUS (2026-10-03): Still open, together with README open question 2: N7.
 
 5. "Send" and "to" (your wishlist 6): drop? The dropdown then needs a screen-reader name (Latin till you give English). Rec: drop.
 DREEV: Ok.
+OPUS (2026-10-03): Done: no "Send" or "to", and the screen-reader names are your English from c483fa3.
 
 6. The footer's top row, where a slightly low nose lands, holds Clear and, logged out, the login button. Put only the safesum and the ? there (the ? back at the top right) and move Clear and login a row down? Rec: yes.
 DREEV: This sounds like a question for someone with an eye for design.
+OPUS (2026-10-03): Designer's answer, measured: keep the rows as they are. Details in N17.
 
 7. After a 401, Submit stays yellow but only repeats the error, and folded, "Try logging in again here." points at a hidden button. Gray out Submit and show the footer unfolded while logged out? Rec: yes (two new ifs).
 DREEV: Probably reasonable?
+OPUS (2026-10-03): Done: logged out, Submit is grayed out, and the footer shows unfolded with the login button. One cost turned up since: N1.
 
 8. Footer trade-offs not yet put to you: unfolded, the big button loses 56–84px on phones; a first visit starts unfolded; folding applies to all windows; Clear and a successful Submit empty the comment. Accept, and cap the unfolded part at about half the screen so 200% text leaves room to tap? Rec: yes.
 DREEV: I guess?
+OPUS (2026-10-03): Done: those trade-offs stay, and the big number now always keeps at least a fifth of the screen (with text at 200% it could shrink to nothing). How the rest gives way: N18.
 
 9. Clear at 0: gray it out, so a double Clear can't wipe out what UNDO could bring back? Rec: yes.
 DREEV: Sounds like another reason to have infinite undo. But also, yeah, Clear should probably be grayed out when the tally's already zero.
+OPUS (2026-10-03): Done: Clear is grayed out whenever the count is 0. (Infinite UNDO was done in Logan's session, wishlist 4.)
 
 10. Typing the number logged out or offline (your wishlist 2): with no goal loaded there's no odometer base, so 130 typed for a goal at 120 would send 250. Keep the number grayed out till the goals load (the comment stays editable)? Rec: yes.
 DREEV: Um, that's confusing. The use case would be that I start doing pushups and only after I have a tally on the screen do I log in so I can send that number to Beeminder. Lemme add a new option question about this...
+OPUS (2026-10-03): Counting first and logging in afterwards works (Logan's session, wishlist 2). One catch, on odometer goals: N5.
 
 11. An iPhone's decimal keypad has no minus key, and comma-decimal regions type a comma, which gets rejected. Keep that keypad? Rec: yes.
 DREEV: I have no idea how to answer this but we should figure it out.
+OPUS (2026-10-03): Figured out from WebKit's source and Apple's docs; the choice is N4.
 
 12. Per-goal counts (your open q 1): all per-goal icons share one count, so a count started for pushups shows up under the situps icon, and Submit would send it there. A separate count, comment and UNDO per goal? Rec: yes (the biggest change here).
 DREEV: Situps icon? What is this talking about?
+OPUS (2026-10-03): Rewritten plainly as N8.
 
 13. On a weak signal TallyBee waits 30+ seconds for the network instead of opening from its saved copy. Open from the copy and update in the background (a new version then shows up one visit late)? Rec: yes (changes one qual).
 DREEV: Sounds dangerous if the user starts doing stuff and then it finally updates?
+OPUS (2026-10-03): Not dangerous that way: a service worker can't change a page that's already open, so a new version only ever shows up when TallyBee loads. The question, rewritten: N9.
 
 14. A link to a goal you don't have (a typo, or a renamed goal) shows no error and becomes the remembered goal. Show an error? Rec: yes (changes one qual).
 DREEV: Yes, always fail loudly.
+OPUS (2026-10-03): Done: such a link now fails loudly, with an error naming the goal (in Latin till you give English: N26).
 
 15. Two TallyBee windows at once can lose a tap (59 of 60 in a test). Stop rewriting all saved state on each goals load? Cost: a goal TallyBee picks by itself isn't remembered for the plain URL. Rec: yes.
 DREEV: ???
+OPUS (2026-10-03): Rewritten plainly as N10.
 
 16. The status line: a failed follow-up goals check replaces the success message, checks stop after one failure, and errors never clear. Leave all that? Rec: yes (clearing errors automatically could hide a failed Submit).
 DREEV: ???
+OPUS (2026-10-03): Rewritten plainly as N11.
 
 17. iPhone home-screen icons each need their own login, and each login logs the others and Safari out (Beeminder keeps one token per app). Accept for now? Rec: yes (the real fix is on Beeminder's server).
 DREEV: Oof. Worth figuring this out somehow.
+OPUS (2026-10-03): Figured out: it takes a change in Beeminder's server (N15).
 
 18. Android, for goals beyond the one installed app: a standalone app per goal (a 404-page hack plus an install button) or Chrome-tab shortcuts? Rec: shortcuts.
 DREEV: I don't know. We've used the GitHub Pages 404 hack before and it's fine I guess. Or we could host this elsewhere.
+OPUS (2026-10-03): N16.
 
 19. Accessibility: UNDO from the keyboard returns the focus to the big button; mouse clicks stop taking Space and Enter away from counting; screen readers announce the count after −1, UNDO or Clear; the big button gets your help sentence "Just tap/click your screen to keep count of something." as its description. All four? Rec: yes.
 DREEV: ???
+OPUS (2026-10-03): Point 4 needed no decision and is done: screen readers now read your sentence "Just tap/click your screen to keep count of something." as the big number's description (and, logged out, the goal link no longer reads as a bare arrow). Points 1-3, rewritten plainly: N13.
 
 20. Accept as is: Clear's weaker pressed look; taps made during a Submit can't be undone; UNDO in a second window during a Submit shows a raw error; values of 10^15 and up get rounded; Ctrl, Cmd and Alt+Enter count; older browsers ring the big button from page load. Rec: yes.
 DREEV: ???
+OPUS (2026-10-03): Rewritten plainly as N14.
 
 21. Testing a local copy (your wishlist 3): add a code comment with the recipe (copy the live site's beeminder-token into localhost's storage), no code change? Rec: yes.
 DREEV: Oh, is it that easy?
+OPUS (2026-10-03): Yes: a local copy works with the live site's beeminder-token copied into its localStorage, since Beeminder's API answers any origin. The recipe is the comment at the top of script.js. Two catches: the copy's Submit sends real datapoints, and its login button logs you out everywhere.
 
 22. GitHub Pages serves AGENTS.md, quals.js, sourcery.html, package.json, icons.sh and two 2.2 MB PNGs along with the app. Fine? Rec: yes.
 DREEV: I usually like to link to sourcery.html explicitly. Added a wishlist item about that. No opinions on the rest.
+OPUS (2026-10-03): Done: the help ends with "Source / Sourcery" links (wishlist 20). Linking Logan's log too: N23.
 
 ## Notes from Opus (2026-10-02)
 
@@ -133,4 +155,70 @@ Spec changes (quals) for your review:
 
 Not done: 1 (per-goal icons already work; questions 17 and 18 still open); 15 (needs replicata: which phone, browser, tab or installed app, folded or not); 17.
 
-Latin awaiting English (screen-reader names): Dies (the day dropdown), Numerus (the number to send), Propositum (the goal dropdown), Pagina propositi (the goal link).
+OPUS (2026-10-03): the Latin screen-reader names above got your English in c483fa3. Of the spec changes listed: 1, 2, 5 and 6 are what your wishlist and answers asked for; 4 was replaced by 10; 11 needs nothing; 3 and 13 are in N6, 9 in N2, 10 in N4, 12 in N9, and 7 and 8 in N24.
+
+## Wishlist status (Opus, 2026-10-03)
+
+Seen working in Chrome, each pinned by quals (all 244 pass): 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 14, 16, 18, 19, 20.
+
+Not yet: 1 (works as far as Android and iPhones allow; needs a check on your phone, and N15 and N16), 7 (N3), 13 (works in Chrome; needs a check on your phone: N20), 15 (cause unknown: N21), 17 (N12).
+
+Also done this round, with quals: a cut-off number to send now ends in "…" (5); UNDO could undo past another window's Submit, sending the same taps twice (4); a minus typed alone was lost when the goals loaded; a datapoint with no comment shows as on Beeminder (9); with text at 200%, Submit and the fold button could run off the screen and an error showed as a sliver; the bar keeps above a phone's own navigation bar wherever the browser reports one (15). The quals' Control+A is ControlOrMeta+A, so they pass on a Mac.
+
+## Questions from Opus (2026-10-03)
+
+Answer inline, or write "defaults" to take every rec.
+
+N1. Logged out, the footer can't fold (your OK to Q7). Not mentioned then: when you count first and log in afterwards (Q10), the login button sits 17px below the black area, where a slightly low nose lands, and pressing it leaves for Beeminder's login mid-set (the count is kept). Let the footer fold while logged out again (Submit stays grayed out; folded, "Try logging in again here." then points at a hidden button)? Rec: yes.
+
+N2. Since Logan's change 9, each datapoint goes with its day. Tap 3 at 11:59pm, Submit fails with no answer (no signal, or a lost reply), Submit again at 12:01am: the resend goes for the new day, and if Beeminder did get the first try, it moves that datapoint to the new day. Keep that, or keep the first try's day (then a count that never got there also goes for yesterday, with any taps added after midnight)? Rec: keep as is.
+
+N3. If the day ends while TallyBee sits open with nothing tapped since, the day dropdown still says "Today (2nd)" but Submit sends the datapoint for the 3rd. Make Submit send the day the dropdown shows? Rec: yes.
+
+N4. The number to send takes whole numbers only (Logan's change 10), and a typed "." or "," just vanishes, so 72.5 typed on an odometer goal sends 725. Allow decimals (one "."; phones then show their decimal keypad, which on iPhones has no minus, leaving −1 for that) and make any refused key show an error instead of vanishing? Rec: yes.
+
+N5. Logged out, or opened with no connection, TallyBee doesn't know an odometer goal's reading, so a typed number counts as an amount to add: on a goal at 120, typing 130 shows 250 once the goal loads (taps are fine). Leave it? Rec: yes (N6 shrinks it to when you're logged out).
+
+N6. A new tab or launch of an odometer goal shows the bare count until the goals load, and the bar shifts 26px when "Submit (∑)" becomes "Submit". Keep the last-loaded goals across launches, and have Submit first re-read the goal's latest datapoint and refuse loudly if the reading moved (one more Beeminder call per Submit), so an old reading can never be built on? Rec: yes to both.
+
+N7. "via TallyBee at Fri Oct 02 2026 18:43:17 GMT-0700 (Pacific Daylight Time)" goes on every datapoint's comment, and since Logan's changes it also shows in TallyBee's footer after each Submit (as the last datapoint and the comment placeholder). Beeminder already keeps each datapoint's entry time and app (shown on hover on the goal page). Drop it? It takes one new if: a resend after a lost reply is then identical, and Beeminder's "Duplicate request" answer has to count as success. Rec: drop.
+
+N8. TallyBee keeps one count per phone. If you add two home-screen icons, one for pushups and one for situps, a count started under the pushups icon also shows under the situps one, and Submit there sends it to situps. Keep one count, or one per goal (which stops "count first, pick the goal after" from working)? Rec: keep one count.
+
+N9. Every launch now waits on the network: in a slow test, 60 seconds before you could count, and never on a connection that hangs. Open at once from a saved copy of the whole current release, fetching the next release in the background (each release then shows up one launch late; an open page never changes under you)? Rec: yes.
+
+N10. With two TallyBee windows open at once (two tabs, or a tab and the installed app), a tap in one can vanish when the other loads your goals (35 of 300 taps in a stress test), because loading the goals rewrites the whole saved tally. Stop that? Side effect: the goal TallyBee picks for you at your first login isn't remembered for the plain link until you pick one or reload. Rec: yes.
+
+N11. Two seconds after a Submit works, TallyBee checks the goal again. If that check fails (the signal just dropped), "Error: Failed to fetch" replaces "✓ Submission successful" though the datapoint got there; checks then stop till you come back; and no error ever clears by itself. Leave all that, clearing stale errors by hand once they're dismissable (N12)? Rec: yes.
+
+N12. Wishlist 17: make messages dismissable with an × at the end of the status line (it takes 24px of tapping room while a message shows)? Rec: yes.
+
+N13. For keyboard and screen-reader users: (1) pressing UNDO from the keyboard till nothing's left drops the keyboard focus, so Space stops counting; send it back to the big number? (2) After clicking −1 with the mouse, Space presses −1 again instead of counting (Chrome focuses a clicked button; Safari doesn't); make clicks leave Space counting? (3) Screen readers say nothing when −1, UNDO or Clear changes the number; announce it? Rec: 1 and 3.
+
+N14. Five small quirks, proposed to be left alone: Clear barely changes color when pressed; taps made while a Submit is on its way can't be undone after it lands; UNDO pressed in a second window while the first is submitting shows "Error: {"undos":[]}"; Ctrl, Cmd and Alt+Enter count like Enter; browsers older than Chrome 145 and Safari 18.4 may show a blue ring around the big number from page load. Leave them? Rec: yes.
+
+N15. Every TallyBee login makes Beeminder mint a new token and kill the old one, so each iPhone icon (each has its own storage, so its own login) logs out the others, Safari and your other devices. Change Beeminder's server (its OAuth fork, or config/initializers/01_oauth_provider.rb) to let an app keep several live tokens per user? Rec: yes. Till then, iPhone icons added with "Open as Web App" off share Safari's login.
+
+N16. On Android only one goal can be a standalone app; for other goals Chrome's "Create shortcut" makes an icon that opens the goal in a Chrome tab. Keep that, or give each goal its own path, like /pushups/, served by GitHub Pages' 404 page plus an Install button inside TallyBee (about seven changes)? Rec: keep the shortcuts.
+
+N17. Q6, measured: a nose landing about 2mm below the black area presses what's under it. Folded, that's UNDO on most phones (Submit below 350px wide); unfolded, Clear or plain text; logged out, the login button (N1). Moving rows can't fix that without costing tapping room; what would is a ~32px dead strip above the footer, at the cost of 3 of the quals' room targets. Keep things as they are? Rec: yes.
+
+N18. With text at 200% on a small phone, something has to give. Now: the bar and a fifth of the screen for the big number come first, then the first line of a message, then the drawer (it scrolls), then a message's other lines. OK? Rec: yes.
+
+N19. When the goal's last datapoint has no comment, the comment field is an empty black capsule with no visible label. Show "Comment (optional)" then (changes one of Logan's quals)? Rec: yes.
+
+N20. Pull-to-refresh is on. Cost: on Android, a touch that slides more than about 1.3mm before lifting counts nothing, since Chrome takes it as the start of a pull. Check on your phone: do 20 nose pushups count 20? Keep it if so? Rec: yes.
+
+N21. Wishlist 15: was it the installed app or a Chrome tab, gesture navigation (a thin line at the bottom) or three buttons, keyboard up or not, text size? A screenshot would settle it. (The page now keeps the bar above the phone's own navigation bar wherever the browser reports one, which may or may not be your case.)
+
+N22. The goal dropdown is now at most 20 characters wide. Show the goal's blurb too? A native dropdown shows the same text open or closed, so the blurb would also show, cut off, in the bar. Rec: no.
+
+N23. Link Logan's session log, sourcery_logan.html, from the help too? If so, with what anchor text?
+
+N24. Accept two quals Logan changed: dropping 568x320 (the first iPhone SE, sideways) from "most of the screen for tapping" (it gets 53% unfolded), and the long-press qual blocking clicks itself instead of expecting a context menu? Rec: yes.
+
+N25. README open questions 4 and 5: add a logout button at the bottom of the help, grayed out when logged out, that forgets the login on this phone only (Beeminder has no call to revoke a single token)? And move the safesum (and goal and username) to a small gray line at the top of the screen, where taps still count, so it shows even folded? Rec: yes to the logout button; a screenshot mock-up first for the top line.
+
+N26. English for the one Latin string left: the error for a link to a goal you don't have, Nullum tibi est propositum "pushpus" (meaning: you have no goal called "pushpus").
+
+Checks only you can do: install a goal as an app on your Android phone (wishlist 1); N20; N21; and pick Yesterday, Submit, and see that the datapoint lands on yesterday on beeminder.com (Logan's change 9, never tried against the real Beeminder).
