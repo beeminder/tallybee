@@ -29,14 +29,18 @@
 <meta name="twitter:card" content="summary_large_image">
 </head>
 <body>
-<div class='versiontag'>v2026.10.01a&nbsp;</div>
-<!-- The big button is a button to the keyboard too: see script.js -->
-<div id="bigbut" role="button" tabindex="0"><span id="count">0</span></div>
+<div class='versiontag'>v2026.10.02a&nbsp;</div>
+<!-- The big button is a button to the keyboard too: see script.js. Its number
+     is script.js's to show: till then, it shows none, rather than one that may
+     be wrong, as on an odometer-like goal. -->
+<div id="bigbut" role="button" tabindex="0"><span id="count"></span></div>
 <!-- While we wait on Beeminder, the infinibee (Beeminder's bee logo, from
-     beeminder.com/press) flies a lemniscate (a figure eight; see style.css) -->
+     beeminder.com/press) flies a lemniscate (a figure eight; see style.css),
+     as on Beeminder's own site, on a canvas the shape of Beeminder's, 400 by
+     200, with the bee as big on it, 50 by 50 -->
 <div id="infinibee" hidden>
-<svg viewBox="-60 -25 120 50">
-<image href="infinibee.svg" x="-9" y="-9" width="18" height="18"/>
+<svg viewBox="-200 -100 400 200">
+<image href="infinibee.svg" x="-25" y="-25" width="50" height="50"/>
 </svg>
 </div>
 
@@ -57,13 +61,23 @@
      (Beedroid's is "Clear") -->
 <button id="clearbut">Clear</button>
 <button id="loginbut"></button>
-<span id="safesum"></span>
+<!-- What Beeminder says about the goal: its safesum, and the datapoint added
+     to it last, as Beeminder's own site shows it (see script.js) -->
+<div id="goalinfo"><span id="safesum"></span><span id="lastdp"></span></div>
 </div>
 <div>
+<!-- The day the pending datapoint is for, today unless picked otherwise, as
+     in Beeminder's own form (see script.js). Grayed out till the goals load,
+     as what day it is depends on them. -->
+<!-- TODO: English for the screen readers' name of the day dropdown: the day
+     the datapoint is for -->
+<select id="day" aria-label="Dies" disabled></select>
 <!-- The comment that goes with the pending datapoint. Enter, the phone
-     keyboard's done key, puts the keyboard away (see script.js). Like N, it
-     starts out grayed out, so that nothing typed in it before script.js runs
-     gets lost. -->
+     keyboard's done key, puts the keyboard away (see script.js). Like the
+     number to send, it starts out grayed out, so that nothing typed in it
+     before script.js runs gets lost. Its placeholder is for when the goal has
+     no datapoints, or there's no goal: otherwise it's the goal's last
+     datapoint's comment (see script.js). -->
 <input id="comment" aria-label="Comment" placeholder="Comment (optional)"
   autocomplete="off" enterkeyhint="done" disabled>
 <button id="infobut" aria-label="Help">?</button>
@@ -71,33 +85,40 @@
 </div> <!-- drawer -->
 <!-- The bar: all that a counting session needs. The send row is in the bar,
      rather than in the drawer, so that where there's room it shares the bar's
-     line (see style.css), but it folds away along with the drawer, and the
-     gist, which says what it would, takes its place. -->
+     line (see style.css), but it folds away along with the drawer. -->
 <div id="bar">
 <div id="sendrow">
-<!-- "Send N to" is what screen readers call the dropdown, and it grays out
-     along with the dropdown. N, the number that Submit sends, can be typed as
-     well as tapped out (see script.js); its form is there so that the number
-     can be put back after typing, and so that Enter, the phone keyboard's done
-     key, puts the keyboard away. The dropdown, N and Submit start out grayed
-     out, so that they never look usable before script.js runs. -->
-<span id="sendword">Send</span>
-<form id="numform" method="dialog"><input id="num" value="0"
-  aria-labelledby="sendword" inputmode="decimal" autocomplete="off"
-  spellcheck="false" enterkeyhint="done" disabled></form>
-<span id="toword">to</span>
-<select name="goals" id="goals" aria-labelledby="sendword num toword"
-  disabled></select>
+<!-- The number that Submit sends, which the big number always shows too, can
+     be typed as well as tapped out (see script.js). Typed, it's a whole
+     number, with a minus in front if it's below 0: phones show their keypad
+     of digits for it (which on iPhones has no minus, leaving −1 to go below
+     0). Its form is there so that Enter, the phone keyboard's done key, puts
+     the keyboard away. Like the big number, it shows no number till script.js
+     does. The number, the dropdown and Submit start out grayed out, so that
+     they never look usable before script.js runs. -->
+<!-- TODO: English for the screen readers' name of the number to send: the
+     datapoint's value -->
+<form id="numform" method="dialog"><input id="num" aria-label="Numerus"
+  inputmode="numeric" autocomplete="off" spellcheck="false" enterkeyhint="done"
+  disabled></form>
+<!-- TODO: English for the screen readers' name of the goal dropdown: which
+     goal to send the datapoint to -->
+<select name="goals" id="goals" aria-label="Propositum" disabled></select>
+<!-- The goal's page on Beeminder, opening apart from TallyBee. With no goal,
+     it's no link, and grayed out. -->
+<!-- TODO: English for the screen readers' name of the link: the goal's page
+     on Beeminder -->
+<a id="goallink" target="_blank" aria-label="Pagina propositi">↗</a>
 </div>
-<!-- The gist: what the send row says, like "Send 12 to pushups", in words
-     only, for while the send row is folded away (see script.js) -->
-<span id="gist" hidden></span>
 <!-- −1 takes one off, and UNDO undoes whatever was done last: a tap, a −1, a
      typed number, an edit of the comment, or a Clear (see script.js). -->
 <div>
 <button id="minusbut">−1</button>
 <button id="undobut" disabled>UNDO</button>
-<button id="subbut" disabled>Submit</button>
+<!-- On goals that sum their datapoints (cumulative, or kyoom, in Beeminder
+     jargon), a sigma, as on the button of Beeminder's own form, "Add progress
+     (∑)" (see script.js) -->
+<button id="subbut" disabled>Submit<span id="sigma"> (∑)</span></button>
 <!-- The fold button: a chevron that points up while the drawer is folded
      away, and down (see style.css) while it shows. -->
 <button id="foldbut" aria-label="More" aria-expanded="true"
@@ -130,6 +151,7 @@ Then Theo Spears pointed out that it wouldn't be too hard to create this as a st
 Then Christopher Moravec whipped up some CSS and Javascript and others jumped in.
 Jake Coble added the coup de grace: actually sending the number to a Beeminder goal.
 </p>
+<p><a href="https://github.com/beeminder/tallybee">Source</a> / <a href="sourcery.html">Sourcery</a></p>
 </div> <!-- modal-body -->
 </div> <!-- modal-content -->
 </dialog>

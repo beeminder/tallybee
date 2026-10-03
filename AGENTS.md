@@ -110,3 +110,27 @@ DREEV: Oh, is it that easy?
 
 22. GitHub Pages serves AGENTS.md, quals.js, sourcery.html, package.json, icons.sh and two 2.2 MB PNGs along with the app. Fine? Rec: yes.
 DREEV: I usually like to link to sourcery.html explicitly. Added a wishlist item about that. No opinions on the rest.
+
+## Notes from Opus (2026-10-02)
+
+Wishlist items done, each with quals (red on the old code, then green): 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 18, 19, 20, plus open question 6. Decided with the person working on this for you: the big number is the reading on odometer goals; pull-to-refresh is allowed; the day is a dropdown like the dashboard's, and TallyBee sends its daystamp; the previous datapoint and the goal link (↗) stay in the footer.
+
+Spec changes (quals) for your review:
+
+1. Submit can send 0.
+2. UNDO goes all the way back to the last Submit.
+3. Odometer goals: the big number shows the reading, and stays at 123 after a Submit rather than going to 0.
+4. Typing junk as the number: the field turns red and Submit grays out; no error is thrown, and the text stays.
+5. The number to send works logged out.
+6. No "Send" or "to", and no folded summary.
+7. 568x320 (first iPhone SE, sideways) dropped from the "more than 55% for tapping" qual: unfolded, it now gets 36%.
+8. The long-press qual blocks clicks rather than expecting a context menu, which headless Chrome on Linux never makes.
+9. Every datapoint now carries a daystamp, so Beeminder gives it its end-of-day timestamp, not the time it was sent (the "via TallyBee at" comment still has that). Not tried against the real Beeminder.
+10. The number to send takes whole numbers only: digits, a minus only in front, at most 15 digits. A keystroke that would make it anything else is undone, so the field always says what the big number says (a lone minus waits for its digits). This replaces the red-field qual, and the qual for typing 1.5 is gone.
+11. The infinibee flies Beeminder's path (from beeminder.com's lemniscate-bernoulli keyframes): up from its right end, head first.
+12. The service worker asks the server every time and marks what it hands the page no-cache. Before, a page could load with an older script.js from the browser's cache ("can't access property "addEventListener", $(...) is null" when switching goals).
+13. Each tab keeps its goals as they last loaded (sessionStorage) and shows them until they load again, so switching goals shows no wrong number in between. The offline-reload qual now expects the kept goals meanwhile.
+
+Not done: 1 (per-goal icons already work; questions 17 and 18 still open); 15 (needs replicata: which phone, browser, tab or installed app, folded or not); 17.
+
+Latin awaiting English (screen-reader names): Dies (the day dropdown), Numerus (the number to send), Propositum (the goal dropdown), Pagina propositi (the goal link).
