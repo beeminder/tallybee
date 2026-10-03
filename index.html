@@ -69,9 +69,7 @@
 <!-- The day the pending datapoint is for, today unless picked otherwise, as
      in Beeminder's own form (see script.js). Grayed out till the goals load,
      as what day it is depends on them. -->
-<!-- TODO: English for the screen readers' name of the day dropdown: the day
-     the datapoint is for -->
-<select id="day" aria-label="Dies" disabled></select>
+<select id="day" aria-label="Day" disabled></select>
 <!-- The comment that goes with the pending datapoint. Enter, the phone
      keyboard's done key, puts the keyboard away (see script.js). Like the
      number to send, it starts out grayed out, so that nothing typed in it
@@ -96,19 +94,13 @@
      the keyboard away. Like the big number, it shows no number till script.js
      does. The number, the dropdown and Submit start out grayed out, so that
      they never look usable before script.js runs. -->
-<!-- TODO: English for the screen readers' name of the number to send: the
-     datapoint's value -->
-<form id="numform" method="dialog"><input id="num" aria-label="Numerus"
+<form id="numform" method="dialog"><input id="num" aria-label="Datapoint value"
   inputmode="numeric" autocomplete="off" spellcheck="false" enterkeyhint="done"
   disabled></form>
-<!-- TODO: English for the screen readers' name of the goal dropdown: which
-     goal to send the datapoint to -->
-<select name="goals" id="goals" aria-label="Propositum" disabled></select>
+<select name="goals" id="goals" aria-label="Beeminder goal" disabled></select>
 <!-- The goal's page on Beeminder, opening apart from TallyBee. With no goal,
      it's no link, and grayed out. -->
-<!-- TODO: English for the screen readers' name of the link: the goal's page
-     on Beeminder -->
-<a id="goallink" target="_blank" aria-label="Pagina propositi">↗</a>
+<a id="goallink" target="_blank" aria-label="Beeminder goal page">↗</a>
 </div>
 <!-- −1 takes one off, and UNDO undoes whatever was done last: a tap, a −1, a
      typed number, an edit of the comment, or a Clear (see script.js). -->
