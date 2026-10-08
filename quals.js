@@ -1168,6 +1168,43 @@ qual('pulling down to reload is left to the browser, and counts nothing', async 
   assert.equal(await count(page), 1)
 })
 
+// Replicata: open TallyBee installed as an app, and pull down on the big
+// button to reload it.
+// Expectata: as in a browser tab (see the qual above), the browser can take
+// the pull, and nothing keeps the page from being pulled: Chrome on Android
+// offers pull-to-refresh in installed apps too, as it gives one to every tab,
+// whatever its display mode (see SwipeRefreshHandler in Chromium). (A desktop
+// Chrome app window, opened with --app, stands in for the installed app: it
+// shows TallyBee in the display mode of TallyBee's app manifest, standalone.)
+// Resultata (in a mutant that kept the installed app from scrolling by
+// clipping it, with @media (display-mode: standalone) { html, body { overflow:
+// hidden } }): html and body overflow-y hidden, which keeps Chrome from
+// pulling to reload.
+test('in an installed app too, pulling down to reload is left to the browser', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tallybee-quals-'))
+  // (The app window opens at TallyBee's URL before the routes below can answer
+  // for it, so the host resolver rules keep it off the network.)
+  const context = await chromium.launchPersistentContext(dir, { channel: 'chrome',
+    args: [`--app=${APP}`, '--host-resolver-rules=MAP * ~NOTFOUND'],
+    viewport: PHONE, serviceWorkers: 'block' })
+  try {
+    await context.route('**', r => r.abort())
+    await context.route(APP + '**', r => serve(r))
+    const page = context.pages()[0]
+    await page.goto(APP)
+    assert.ok(await page.evaluate(() => matchMedia('(display-mode: standalone)').matches))
+    const css = (sel, props) => page.$eval(sel, (e, ps) =>
+      ps.map(p => getComputedStyle(e)[p]), props)
+    assert.deepEqual(await css('#bigbut', ['touchAction']), ['pan-y'])
+    for (const sel of ['html', 'body'])
+      assert.deepEqual(await css(sel, ['overflowY', 'overscrollBehaviorY']),
+                       ['visible', 'auto'], sel)
+  } finally {
+    await context.close()
+    rmSync(dir, { recursive: true })
+  }
+})
+
 // ------------------------------------------------------------- submitting
 
 // Replicata: log in, and, without tapping, press Submit.
@@ -4504,6 +4541,34 @@ qual('the page itself never scrolls, even under a long error', async (page, bee)
       await tap(page, '#foldbut')
     }
   }
+})
+
+// Replicata: on an Android phone, open TallyBee installed as an app, where
+// Chrome works out 100dvh (100 units of the dynamic viewport height) as taller
+// than the app's window, by about the height of its own toolbar, as Chromium
+// issues 463721080 and 453570183 report of installed apps; then try to scroll
+// the page.
+// Expectata: the page fits its window anyway, the bar whole on the screen, and
+// there's nothing to scroll. (Headless Chrome gets 100dvh right, so a 6% zoom
+// of the page stands in for Chrome's mistake: zoom scales lengths in viewport
+// units, like 100dvh, but not percentages, like html's 100%.)
+// Resultata (v2026.10.03b, whose page was 100dvh tall): a page 895px tall in
+// an 844px window, which scrolled 51px, with the bar's bottom off the screen
+// till it did. (And clipped to its window, as it was before 3d3b99a, the
+// page's bottom 51px stayed off the screen: wishlist 15's "the bottom of the
+// footer bar runs off the bottom of the screen and is inaccessible".)
+qual('the page fits its window even where Chrome makes 100dvh taller, as in installed apps', async page => {
+  await login(page)
+  await page.addStyleTag({ content: 'body { zoom: 1.06 }' })
+  const [sh, ch] = await page.evaluate(() => { const e = document.scrollingElement
+    return [e.scrollHeight, e.clientHeight] })
+  assert.ok(sh <= ch, `a page ${sh}px tall in a ${ch}px window`)
+  for (const sel of BAR) {
+    const b = await box(page, sel)
+    assert.ok(b.y + b.height <= PHONE.height, `${sel}: ${JSON.stringify(b)}`)
+  }
+  await page.evaluate(() => scrollBy(0, 200))
+  assert.equal(await page.evaluate(() => scrollY), 0)
 })
 
 // Replicata: put the phone on the floor with the footer unfolded, sideways,

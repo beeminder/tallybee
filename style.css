@@ -47,12 +47,17 @@ html {
   text-size-adjust: 100%;
 }
 
-/* The big button takes all the height the footer doesn't. The dynamic
-   viewport height (dvh) excludes phone browsers' address bars. */
+/* The big button takes all the height the footer doesn't. The page is as tall
+   as its window: html's 100%, which phone browsers make the height with their
+   address bars showing, as they stay on a page that never scrolls. (Not
+   100dvh, the dynamic viewport height, which Chrome on Android can work out as
+   taller than the window of an app installed from the page, by about its own
+   toolbar's height, as Chromium issues 463721080 and 453570183 report, so that
+   the page scrolled by that much, or, clipped to its window, ran off the
+   bottom of the screen.) */
 body {
   display: flex;
   flex-direction: column;
-  height: 100dvh;
   background-color: black;
   touch-action: manipulation; /* no double-tap zooming */
   font-family: system-ui, sans-serif; /* each device's own font */
@@ -90,7 +95,7 @@ body {
   /* Never less than a fifth of the screen, even where the footer, unfolded,
      would leave less, as with text at 200%: the footer's drawer scrolls
      instead (see .footer), so that there's always room to tap */
-  min-height: 20dvh;
+  min-height: 20%;
   display: grid;
   place-items: center;
   overflow: hidden;
@@ -392,7 +397,7 @@ body {
    for less motion, it just sits there, in the middle of its figure eight. */
 #infinibee {
   position: fixed;
-  top: 8dvh;
+  top: 8%;
   left: 50%;
   translate: -50%;
   width: min(80vw, 360px);

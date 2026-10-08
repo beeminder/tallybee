@@ -2,9 +2,11 @@ https://tallybee.beeminder.com
 
 ## Wishlist
 
-1. What we really need is a way to have an icon on your phone's homescreen that opens up TallyBee with a specific Beeminder goal selected.
+1. What we really need is a way to have an icon on your phone's homescreen that opens up TallyBee with a specific Beeminder goal selected. And most important that that work on iPhone since the impetus for TallyBee is to replicate the functionality built into Beedroid, the Beeminder Android app.
 
-2. The footer got so cluttered. We could move more things to the help popup for starters?
+2. The footer got so cluttered. We could move more things to the help popup for starters? Or maybe we want a hamburger menu where everything that shouldn't clutter the footer should go, including the help button?
+
+3. Bug: The app is currently scrolling for me when installed as an app (PWA, however that works) on Android.
 
 
 ## Open questions
@@ -22,6 +24,8 @@ https://tallybee.beeminder.com
 6. What should happen when you load an odometer goal? Currently the app violates the seeming invariant that the big blue tally always mirrors the datapoint value field: the tally shows the delta and the field shows the absolute number.
 
 7. How to handle it when the Beeminder deadline passes and it becomes a new day. Probably emulate the Beeminder dashboard: throw up a warning banner but don't tamper with the UI.
+
+8. The scroll-bug fix (v2026.10.08a) makes the page as tall as its window (CSS height: 100%) rather than 100dvh (the "dynamic viewport height"), since Chrome on Android can work out 100dvh as taller than an installed app's window (Chromium issues 463721080 and 453570183). The cost is in a browser tab: whenever Chrome's address bar slides away, as it can after you pinch-zoom and drag, a black strip as tall as the address bar shows below the footer till the bar comes back, and it's unknown whether Chrome brings it back on a page with nothing to scroll. (With 100dvh the page grew to fill that space instead, but could then be scrolled by that much.) The alternative is pinning the page to the screen (position: fixed), which fills the screen with or without the address bar, at the cost of four more lines of CSS, a reworded pull-to-refresh qual, and one untested case: what Safari on iPhones does with a pinned page when the keyboard comes up. Keep the strip, or pin the page?
 
 
 ## Closed questions and completed things
