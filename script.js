@@ -339,13 +339,8 @@ function render() {
     .map(([ds, k]) => new Option(dayname(ds, k), ds)))
   $('day').value = t.day ?? daystamp(g, 0)
   $('undobut').disabled = busy || t.undos.length === 0
-  // Logged out, the footer shows unfolded, folded or not, as the login button
-  // is in the drawer; and the fold button, with nothing it can do then, is
-  // grayed out
-  const folded = t.folded && !out
-  $('drawer').hidden = $('sendrow').hidden = folded
-  $('foldbut').setAttribute('aria-expanded', !folded)
-  $('foldbut').disabled = out
+  $('drawer').hidden = t.folded
+  $('foldbut').setAttribute('aria-expanded', !t.folded)
   // Picking a goal loads another page, which wouldn't hear Beeminder's reply.
   // And with no goals, like when logged out, there's nothing to pick, and no
   // telling what day it is for the goal.
@@ -581,14 +576,15 @@ $('day').addEventListener('change',
 $('comment').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.isComposing) $('comment').blur()
 })
-// The fold button folds away the drawer and the send row, or brings them back
+// The fold button folds away the drawer, or brings it back
 $('foldbut').addEventListener('click', () => update(t => { t.folded = !t.folded }))
 $('subbut').addEventListener('click', submit)
-// Picking a goal loads its page, which can take a while; till it comes,
-// TallyBee is busy, and shows it
+// Picking a goal, in the menu, closes the menu and loads the goal's page,
+// which can take a while; till it comes, TallyBee is busy, and shows it
 $('goals').addEventListener('change', () => {
   busy = true
   render()
+  $('menu').close()
   location.replace(goalurl($('goals').value))
 })
 // The login button sends you to Beeminder, which sends you right back (with an
@@ -596,14 +592,18 @@ $('goals').addEventListener('change', () => {
 // shows your username instead, and can't be pressed (see render).
 $('loginbut').addEventListener('click',
                                () => beeminder.login(clientId, redirectUri))
-// The menu button opens the help, which is the menu too: Clear is in it, and
-// closes it, as its form says (see index.html)
-$('infobut').addEventListener('click', () => $('info').showModal())
-// Tapping outside the help closes it: taps on the backdrop go to the dialog
-// element but taps on what's inside it stop there
-$('info').addEventListener('click', () => $('info').close())
-$('info').querySelector('.modal-content')
-         .addEventListener('click', e => e.stopPropagation())
+// The menu button opens the menu, and the help button, in the menu, closes the
+// menu and opens the help. (Clear, in the menu, closes it as its form says: see
+// index.html.)
+$('menubut').addEventListener('click', () => $('menu').showModal())
+$('infobut').addEventListener('click', () => { $('menu').close()
+                                               $('info').showModal() })
+// Tapping outside the menu, or the help, closes it: taps on the backdrop go to
+// the dialog element but taps on what's inside it stop there
+for (const id of ['menu', 'info']) {
+  $(id).addEventListener('click', () => $(id).close())
+  $(id).querySelector('.modal-content').addEventListener('click', e => e.stopPropagation())
+}
 // Safari on iPhones shows a button as pressed (see :active in style.css) only
 // while something is listening for touches, so this listens, and does nothing
 document.body.addEventListener('touchstart', () => {}, { passive: true })

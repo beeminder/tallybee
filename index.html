@@ -29,10 +29,11 @@
 <meta name="twitter:card" content="summary_large_image">
 </head>
 <body>
-<div class='versiontag'>v2026.10.08b&nbsp;</div>
+<div class='versiontag'>v2026.10.08c&nbsp;</div>
 <!-- The stage: the big button, and, over its top, the top line and the
      infinibee, which taps go right through, to the big button (see
-     style.css) -->
+     style.css), and the menu button, at the top right corner, which takes
+     its own -->
 <div id="stage">
 <!-- The big button is a button to the keyboard too: see script.js. Its number
      is script.js's to show: till then, it shows none, rather than one that may
@@ -55,6 +56,13 @@
 </svg>
 </div>
 </div> <!-- top -->
+<!-- The menu button: three lines, the usual sign of a menu, at the top right
+     corner of the screen, where menus usually are, over the big button, which
+     gets the touches around it. It opens the menu (see #menu). -->
+<button id="menubut" aria-label="Menu" aria-haspopup="dialog"><svg
+  viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
+  stroke-width="2" stroke-linecap="round" aria-hidden="true"><path
+  d="M2.5 3.5h11M2.5 8h11M2.5 12.5h11"/></svg></button>
 </div> <!-- stage -->
 
 <div class="footer">
@@ -67,40 +75,19 @@
      bar below, folds away and brings back (see script.js). The bar itself
      never folds away, and never moves. -->
 <div id="drawer">
-<!-- The info line: who's logged in (or, logged out, the login button), and
-     the datapoint added to the goal last, as Beeminder's own site shows it
-     (see script.js). Logged in, it's words only, which a touch just below the
-     big button lands on, rather than on a control (see style.css). -->
+<!-- The info line: the datapoint added to the goal last, as Beeminder's own
+     site shows it (see script.js). It's words only, which a touch just below
+     the big button lands on, rather than on a control (see style.css). -->
 <div id="infoline">
-<button id="loginbut"></button>
 <span id="lastdp"></span>
 </div>
-<div>
+<!-- The form row: the pending datapoint, in the order of Beeminder's own
+     form: its day, its value, and its comment. -->
+<div id="formrow">
 <!-- The day the pending datapoint is for, today unless picked otherwise, as
      in Beeminder's own form (see script.js). Grayed out till the goals load,
      as what day it is depends on them. -->
 <select id="day" aria-label="Day" disabled></select>
-<!-- The comment that goes with the pending datapoint. Enter, the phone
-     keyboard's done key, puts the keyboard away (see script.js). Like the
-     number to send, it starts out grayed out, so that nothing typed in it
-     before script.js runs gets lost. Its placeholder is for when the goal has
-     no datapoints, or there's no goal: otherwise it's the goal's last
-     datapoint's comment (see script.js). -->
-<input id="comment" aria-label="Comment" placeholder="Comment (optional)"
-  autocomplete="off" enterkeyhint="done" disabled>
-<!-- The menu button: three lines, the usual sign of a menu, which opens the
-     help, now a menu too, with Clear in it (see #info) -->
-<button id="infobut" aria-label="Help" aria-haspopup="dialog"><svg
-  viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
-  stroke-width="2" stroke-linecap="round" aria-hidden="true"><path
-  d="M2.5 3.5h11M2.5 8h11M2.5 12.5h11"/></svg></button>
-</div>
-</div> <!-- drawer -->
-<!-- The bar: all that a counting session needs. The send row is in the bar,
-     rather than in the drawer, so that where there's room it shares the bar's
-     line (see style.css), but it folds away along with the drawer. -->
-<div id="bar">
-<div id="sendrow">
 <!-- The number that Submit sends, which the big number always shows too, can
      be typed as well as tapped out (see script.js). Typed, it's a whole
      number, with a minus in front if it's below 0: phones show their keypad
@@ -112,12 +99,18 @@
 <form id="numform" method="dialog"><input id="num" aria-label="Datapoint value"
   inputmode="numeric" autocomplete="off" spellcheck="false" enterkeyhint="done"
   disabled></form>
-<select name="goals" id="goals" aria-label="Beeminder goal" disabled></select>
-<!-- The goal's page on Beeminder, opening apart from TallyBee. With no goal,
-     it's no link, and grayed out, and screen readers say nothing of it (its
-     name is for the link; its arrow is for the eye). -->
-<a id="goallink" target="_blank" aria-label="Beeminder goal page"><span aria-hidden="true">↗</span></a>
+<!-- The comment that goes with the pending datapoint. Enter, the phone
+     keyboard's done key, puts the keyboard away (see script.js). Like the
+     number to send, it starts out grayed out, so that nothing typed in it
+     before script.js runs gets lost. Its placeholder is for when the goal has
+     no datapoints, or there's no goal: otherwise it's the goal's last
+     datapoint's comment (see script.js). -->
+<input id="comment" aria-label="Comment" placeholder="Comment (optional)"
+  autocomplete="off" enterkeyhint="done" disabled>
 </div>
+</div> <!-- drawer -->
+<!-- The bar: all that a counting session needs. -->
+<div id="bar">
 <!-- −1 takes one off, and UNDO undoes whatever was done last: a tap, a −1, a
      typed number, an edit of the comment, or a Clear (see script.js). -->
 <div>
@@ -130,15 +123,46 @@
 <!-- The fold button: a chevron that points up while the drawer is folded
      away, and down (see style.css) while it shows. -->
 <button id="foldbut" aria-label="More" aria-expanded="true"
-  aria-controls="drawer sendrow"><svg viewBox="0 0 16 16" width="16" height="16"
+  aria-controls="drawer"><svg viewBox="0 0 16 16" width="16" height="16"
   fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
   stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5l5-5 5 5"/></svg></button>
 </div>
 </div> <!-- bar -->
 </div> <!-- footer -->
 
-<!-- The help, which is the menu too: a sheet that the menu button opens, with
-     Clear atop the help and credits -->
+<!-- The menu: a sheet that the menu button opens, listing what a counting
+     session doesn't need, each on a row of its own: who's logged in (or,
+     logged out, the login button), the goal, with its page on Beeminder,
+     Clear, and the help. Picking anything in it closes it, as does a tap
+     outside it, or Escape (see script.js). -->
+<dialog id="menu" aria-label="Menu">
+<div class="modal-content menu">
+<!-- The login button sends you to Beeminder to log in; logged in, it only
+     says who's logged in (see script.js). -->
+<div><button id="loginbut"></button></div>
+<div>
+<!-- The goal the count goes to, and its page on Beeminder -->
+<select name="goals" id="goals" aria-label="Beeminder goal" disabled></select>
+<!-- The goal's page on Beeminder, opening apart from TallyBee. With no goal,
+     it's no link, and grayed out, and screen readers say nothing of it (its
+     name is for the link; its arrow is for the eye). -->
+<a id="goallink" target="_blank" aria-label="Beeminder goal page"><span aria-hidden="true">↗</span></a>
+</div>
+<!-- Clear, which wipes out the count (though UNDO can bring it back), sits
+     apart from the rest, in the menu, far from UNDO. Its form closes the menu
+     once it's pressed, as picking anything in a menu does, showing the count,
+     now 0, and UNDO. -->
+<form method="dialog">
+<!-- label for the button that zeroes the count without submitting it
+     (Beedroid's is "Clear") -->
+<button id="clearbut">Clear</button>
+</form>
+<!-- The help button, which closes the menu and opens the help (see
+     script.js) -->
+<div><button id="infobut">Help</button></div>
+</div> <!-- modal-content -->
+</dialog>
+
 <dialog id="info" aria-labelledby="infotitle">
 <div class="modal-content">
 <div class="modal-header">
@@ -146,15 +170,6 @@
   <h2 id="infotitle">TallyBee</h2>
 </div>
 <div class="modal-body">
-<!-- Clear, which wipes out the count (though UNDO can bring it back), sits
-     apart from the rest, in the menu, far from UNDO. Its form closes the menu
-     once it's pressed, as picking anything in a menu does, showing the count,
-     now 0, and UNDO. -->
-<form method="dialog" class="menu">
-<!-- label for the button that zeroes the count without submitting it
-     (Beedroid's is "Clear") -->
-<button id="clearbut">Clear</button>
-</form>
 <p>
 This replicates the tally counter feature of Beedroid.
 <span id="tapping">Just tap/click your screen to keep count of something.</span>
