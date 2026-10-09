@@ -1,5 +1,8 @@
 https://tallybee.beeminder.com
 
+Staging for Claude:
+it turns out i don't want wade through all the junk in the non-human section of AGENTS.md. can you go through all that and ask me what you still need to one thing at a time?
+
 ## Wishlist
 
 1. What we really need is a way to have an icon on your phone's homescreen that opens up TallyBee with a specific Beeminder goal selected. And most important that that work on iPhone since the impetus for TallyBee is to replicate the functionality built into Beedroid, the Beeminder Android app.

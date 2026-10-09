@@ -279,6 +279,17 @@ async function tap(page, sel, n = 1) {
   for (let i = 0; i < n; i++) await (touch ? page.tap(sel) : page.click(sel))
 }
 
+// FINAL DESIGN: Clear is in the menu (the help, opened with the menu button).
+// Press it the way a person does: open the menu, and tap Clear, which closes
+// the menu.
+async function clear(page) {
+  await page.bringToFront()
+  await tap(page, '#infobut')
+  await tap(page, '#clearbut')
+  assert.ok(await till(page, async () => !await page.$eval('#info', d => d.open)),
+            'Clear closes the menu')
+}
+
 // Tap the big button n times, all at once, which is faster than tap for big n
 const taps = (page, n) => page.evaluate(n => {
   const b = document.getElementById('bigbut')
@@ -355,7 +366,9 @@ const box = (page, sel) => page.locator(sel).boundingBox()
 
 // What folding the footer hides (the drawer and the send row: see index.html),
 // and the controls of the bar, which it never hides
-const FOLDAWAY = ['#clearbut', '#loginbut', '#safesum', '#lastdp', '#day', '#comment',
+// FINAL DESIGN: Clear is in the menu, and the safesum in the top line, which
+// shows folded too
+const FOLDAWAY = ['#loginbut', '#lastdp', '#day', '#comment',
                   '#infobut', '#num', '#goals', '#goallink']
 const BAR = ['#minusbut', '#undobut', '#subbut', '#foldbut']
 
@@ -374,9 +387,11 @@ async function remark(page, text) {
 // Assert that every control in the footer, and its texts, are whole and on the
 // screen, with nothing sticking out sideways, and none on top of another. Or
 // just the ones matching sels, like those that show with the footer folded.
-const FOOTER = ['#minusbut', '#undobut', '#clearbut', '#loginbut', '#infobut', '#num',
+// FINAL DESIGN: not Clear, which is in the menu; and the top line's goal name
+// and safesum
+const FOOTER = ['#minusbut', '#undobut', '#loginbut', '#infobut', '#num',
                 '#goals', '#goallink', '#subbut', '#safesum', '#lastdp', '#day', '#comment',
-                '#foldbut', '.versiontag']
+                '#foldbut', '.versiontag', '#goalname']
 async function fits(page, sels = FOOTER) {
   const { width, height } = page.viewportSize()
   const boxes = await Promise.all(sels.map(s => box(page, s)))
@@ -900,7 +915,7 @@ qual('UNDO undoes whatever was just done: a tap, −1, or Clear', async page => 
   await see(page, '#bigbut', '1')
   await tap(page, '#undobut')
   await see(page, '#bigbut', '2')
-  await tap(page, '#clearbut')
+  await clear(page) // FINAL DESIGN
   await see(page, '#bigbut', '0')
   await tap(page, '#undobut')
   await see(page, '#bigbut', '2')
@@ -918,7 +933,7 @@ qual('UNDO undoes a Clear, datapoint and all', async (page, bee) => {
   await tap(page, '#bigbut', 3)
   await tap(page, '#subbut')
   await expectError(page, bee, /fetch/i)
-  await tap(page, '#clearbut')
+  await clear(page) // FINAL DESIGN
   await see(page, '#bigbut', '0')
   await tap(page, '#undobut')
   await see(page, '#bigbut', '3')
@@ -985,7 +1000,7 @@ qual('a broken memory fails loudly, rather than getting quietly filled in', asyn
 qual('UNDO survives reloading the page', async page => {
   await login(page)
   await tap(page, '#bigbut', 4)
-  await tap(page, '#clearbut')
+  await clear(page) // FINAL DESIGN
   await see(page, '#bigbut', '0')
   await page.reload()
   await see(page, '#goals', /pushups/)
@@ -1004,7 +1019,7 @@ qual('UNDO undoes everything since the last Submit, one thing at a time', async 
   await tap(page, '#bigbut', 3)
   await tap(page, '#minusbut')
   await remark(page, 'felt strong')
-  await tap(page, '#clearbut')
+  await clear(page) // FINAL DESIGN
   await see(page, '#bigbut', '0')
   for (const [n, comment] of [['2', 'felt strong'], ['2', ''], ['3', ''], ['2', ''],
                               ['1', ''], ['0', '']]) {
@@ -1022,7 +1037,7 @@ qual('UNDO undoes everything since the last Submit, one thing at a time', async 
 qual('the clear button zeroes the count', async page => {
   await login(page)
   await tap(page, '#bigbut', 3)
-  await tap(page, '#clearbut')
+  await clear(page) // FINAL DESIGN
   await see(page, '#bigbut', '0')
 })
 
@@ -1038,7 +1053,7 @@ qual('Clear is grayed out when the tally is already 0', async page => {
   assert.ok(await disabled(page, '#clearbut'), 'at first')
   await tap(page, '#bigbut')
   assert.ok(!await disabled(page, '#clearbut'), 'after a tap')
-  await tap(page, '#clearbut')
+  await clear(page) // FINAL DESIGN
   await see(page, '#bigbut', '0')
   assert.ok(await disabled(page, '#clearbut'), 'after the Clear')
   await choose(page, 'pages')
@@ -1051,17 +1066,19 @@ qual('Clear is grayed out when the tally is already 0', async page => {
 // (about a fingertip) from each of them, and looks unlike UNDO.
 // Resultata (before): Clear was 8px from UNDO, and looked just like it.
 for (const [width, height] of [[320, 568], [390, 844], [600, 800], [844, 390]])
-  qual(`Clear is far from −1, UNDO, Submit and ? (${width}x${height})`, async page => {
+  // FINAL DESIGN: renamed from "Clear is far from −1, UNDO, Submit and ?"
+  qual(`Clear is in the menu, not the footer, and looks unlike UNDO (${width}x${height})`, async page => {
     await login(page)
     await tap(page, '#bigbut', 3)
     // How far apart two boxes are, at least, edge to edge
     const gap = (a, b) => Math.max(b.x - (a.x + a.width), a.x - (b.x + b.width),
                                    b.y - (a.y + a.height), a.y - (b.y + b.height))
-    const clear = await box(page, '#clearbut')
-    for (const sel of ['#minusbut', '#undobut', '#subbut', '#infobut']) {
-      const g = gap(clear, await box(page, sel))
-      assert.ok(g >= 44, `Clear is ${g}px from ${sel}`)
-    }
+    // FINAL DESIGN: Clear isn't in the footer at all, but in the menu, apart
+    // from all the footer's controls
+    assert.ok(!await page.isVisible('#clearbut'), 'Clear in the footer')
+    await tap(page, '#infobut')
+    assert.ok(await page.isVisible('#clearbut'), 'Clear in the menu')
+    void gap
     const look = sel => page.$eval(sel, e => {
       const s = getComputedStyle(e)
       return [s.color, s.backgroundColor, s.borderTopColor].join()
@@ -1464,7 +1481,7 @@ qual('Clear in another window during a submission leaves the count at 0', async 
   await tap(page, '#subbut')
   await calls(page, bee, 2 * LOAD + 1)
   await w.bringToFront()
-  await tap(w, '#clearbut')
+  await clear(w) // FINAL DESIGN
   open(null)
   await see(w, '#bigbut', '0')
   await page.bringToFront()
@@ -1593,7 +1610,7 @@ qual('Clear starts a new datapoint, even after a lost reply', async (page, bee) 
   await tap(page, '#bigbut', 3)
   await tap(page, '#subbut')
   await expectError(page, bee, /fetch/i)
-  await tap(page, '#clearbut')
+  await clear(page) // FINAL DESIGN
   await see(page, '#bigbut', '0')
   bee.reply = () => null
   await tap(page, '#bigbut', 2)
@@ -2187,7 +2204,7 @@ qual('UNDO of a Clear brings back the odometer datapoint, base and all', async (
   await expectError(page, bee, /fetch/i)
   await comeback(page)
   await see(page, '#safesum', 'safe for 4 days')
-  await tap(page, '#clearbut')
+  await clear(page) // FINAL DESIGN
   await till(page, async () => (await tallied(page)).count === 0)
   await see(page, '#bigbut', '123') // where the goal is now
   await tap(page, '#undobut')
@@ -2218,7 +2235,7 @@ qual('Clear starts a new odometer datapoint from where the goal is now', async (
   bee.reply = () => null
   await comeback(page)
   await see(page, '#safesum', 'safe for 4 days')
-  await tap(page, '#clearbut')
+  await clear(page) // FINAL DESIGN
   await till(page, async () => (await tallied(page)).count === 0)
   await tap(page, '#bigbut', 2)
   await see(page, '#num', '125')
@@ -2535,7 +2552,7 @@ qual('Submit and Clear start the next datapoint with no comment', async (page, b
   await see(page, '#comment', '')
   await remark(page, 'set 2')
   await tap(page, '#bigbut')
-  await tap(page, '#clearbut')
+  await clear(page) // FINAL DESIGN
   await see(page, '#comment', '')
   await tap(page, '#bigbut', 2)
   await tap(page, '#subbut')
@@ -2552,7 +2569,7 @@ qual('UNDO brings back a cleared comment along with the count', async page => {
   await login(page)
   await remark(page, 'felt strong')
   await tap(page, '#bigbut', 3)
-  await tap(page, '#clearbut')
+  await clear(page) // FINAL DESIGN
   await see(page, '#bigbut', '0')
   await see(page, '#comment', '')
   await tap(page, '#undobut')
@@ -3002,7 +3019,8 @@ qual("Space and Enter in the comment field don't count", async page => {
 qual('a comment typed after tabbing to its field is saved, and undoable', async page => {
   await login(page)
   await page.click('#bigbut')
-  for (let i = 0; i < 3; i++) await page.keyboard.press('Tab')
+  // FINAL DESIGN: 2 Tabs, with Clear in the menu
+  for (let i = 0; i < 2; i++) await page.keyboard.press('Tab')
   assert.equal(await page.evaluate(() => document.activeElement.id), 'comment')
   await page.keyboard.type('abc')
   await page.keyboard.press('Enter')
@@ -3175,7 +3193,7 @@ qual('Clear clears at once, even while the goals are loading', async (page, bee)
   await see(page, '#bigbut', '0')
   await runtill(page, bee, LOAD + 3) // the goals and the user, asked for at once
   await tap(page, '#bigbut', 2)
-  await tap(page, '#clearbut')
+  await clear(page) // FINAL DESIGN
   await see(page, '#bigbut', '0')
   await tap(page, '#bigbut', 5)
   open()
@@ -3866,9 +3884,13 @@ qual('folding the footer leaves the bar; unfolding brings back the rest', async 
 // the rest of the bar above Clear's row and the comment's.
 for (const [width, height, lines] of [[390, 844, [0, 1, 2, 3]], [320, 568, [0, 1, 2, 3]],
                                       [844, 390, [0, 0, 1, 1]]])
-  qual(`unfolded, the footer goes from Clear's row down to the bar (${width}x${height})`, async page => {
+  // FINAL DESIGN: renamed from "unfolded, the footer goes from Clear's row
+  // down to the bar"
+  qual(`unfolded, the footer goes from the info line down to the bar (${width}x${height})`, async page => {
     await login(page)
-    const rows = [['#clearbut', '#loginbut'], ['#day', '#comment', '#infobut'],
+    // FINAL DESIGN: the info line, the username and the last datapoint, where
+    // Clear's row was
+    const rows = [['#loginbut', '#lastdp'], ['#day', '#comment', '#infobut'],
                   ['#num', '#goals', '#goallink'], BAR]
     // Each row's controls' middles, top to bottom
     const mids = await Promise.all(rows.map(r => Promise.all(r.map(async sel => {
@@ -3893,19 +3915,24 @@ for (const [width, height, lines] of [[390, 844, [0, 1, 2, 3]], [320, 568, [0, 1
 // set Clear apart from UNDO in its row): logged out on the phone turned
 // sideways, the login button sat 46px from Clear, up against the comment
 // field.
-qual('the login button sits beside Clear, as wide as its label, which wraps only if it must', async page => {
+// FINAL DESIGN: renamed from "the login button sits beside Clear, as wide as
+// its label, which wraps only if it must"
+qual('the login button heads the footer, as wide as its label, which wraps only if it must', async page => {
   // Whether boxes a and b are side by side: their middles level, and b 8px
   // after a
   const beside = (a, b) => Math.abs(a.y + a.height / 2 - (b.y + b.height / 2)) < 1 &&
                            Math.abs(a.x + a.width + 8 - b.x) < 1
   await page.setViewportSize({ width: 320, height: 568 })
   await page.goto(APP)
-  let [c, l] = [await box(page, '#clearbut'), await box(page, '#loginbut')]
-  assert.ok(beside(c, l) && l.x + l.width <= 304 && l.height < 2 * 44,
-            JSON.stringify([c, l]))
+  // FINAL DESIGN: with Clear in the menu, the login button heads the footer,
+  // at its left edge
+  void beside
+  let l = await box(page, '#loginbut')
+  assert.ok(l.x === 16 && l.x + l.width <= 304 && l.height < 2 * 44, JSON.stringify(l))
   await page.setViewportSize({ width: 844, height: 390 })
-  ;[c, l] = [await box(page, '#clearbut'), await box(page, '#loginbut')]
-  assert.ok(beside(c, l), JSON.stringify([c, l]))
+  l = await box(page, '#loginbut')
+  // (the footer's margin there is 22px: see .footer in style.css)
+  assert.ok(l.x === 844 / 2 - 400 && l.height === 44, JSON.stringify(l))
   await page.setViewportSize(PHONE)
   for (const name of ['alice', 'christophermoravec']) {
     // Logged in, the username can't be pressed to log in as someone else, so
@@ -3913,7 +3940,7 @@ qual('the login button sits beside Clear, as wide as its label, which wraps only
     await page.evaluate(() => localStorage.removeItem('beeminder-token'))
     await page.reload()
     await login(page, name)
-    ;[c, l] = [await box(page, '#clearbut'), await box(page, '#loginbut')]
+    l = await box(page, '#loginbut')
     // The width of its label, and of its padding and border
     const fit = await page.$eval('#loginbut', b => {
       const r = document.createRange(), s = getComputedStyle(b)
@@ -3922,8 +3949,10 @@ qual('the login button sits beside Clear, as wide as its label, which wraps only
         parseFloat(s.paddingRight) + parseFloat(s.borderLeftWidth) +
         parseFloat(s.borderRightWidth)
     })
-    assert.ok(beside(c, l) && l.height === 44 && Math.abs(l.width - fit) < 1,
-              JSON.stringify({ name, c, l, fit }))
+    // FINAL DESIGN: the username, plain text, is one line of words, 20px
+    // tall, at the footer's left edge
+    assert.ok(l.x === 16 && l.height === 20 && Math.abs(l.width - fit) < 1,
+              JSON.stringify({ name, l, fit }))
   }
 })
 
@@ -3934,7 +3963,8 @@ qual('the login button sits beside Clear, as wide as its label, which wraps only
 // row 8px below Clear's.
 qual("the footer's rows are 12px apart", async page => {
   await login(page)
-  const rows = await Promise.all(['.footer', '#clearbut', '#comment', '#num', '#minusbut']
+  // FINAL DESIGN: from the info line (its username), where Clear's row was
+  const rows = await Promise.all(['.footer', '#loginbut', '#comment', '#num', '#minusbut']
     .map(s => box(page, s)))
   assert.deepEqual(rows.slice(1).map((r, i) => r.y - (i ? rows[i].y + rows[i].height
                                                         : rows[0].y + 1)),
@@ -4117,14 +4147,16 @@ qual('the fold is remembered, and shared by all TallyBee windows', async page =>
   await page.reload()
   await see(page, '#goals', /pushups/)
   assert.ok(!await unfolded(page))
-  assert.ok(!await page.isVisible('#clearbut'))
+  // FINAL DESIGN: the comment field, not Clear (in the menu), is what shows
+  // that the footer is unfolded
+  assert.ok(!await page.isVisible('#comment'))
   const w = await window2(page, APP)
   await see(w, '#goals', /pushups/)
-  assert.ok(!await w.isVisible('#clearbut'))
+  assert.ok(!await w.isVisible('#comment'))
   await w.bringToFront()
   await tap(w, '#foldbut')
   await page.bringToFront()
-  await page.locator('#clearbut').waitFor()
+  await page.locator('#comment').waitFor()
   assert.ok(await unfolded(page))
   assert.equal(await folded(page), false)
 })
@@ -4149,7 +4181,8 @@ qual('the Tab order goes row by row, and skips what is folded away', async page 
     }
     return ids
   }
-  assert.deepEqual(await order(11), ['clearbut', 'day', 'comment', 'infobut', 'num',
+  // FINAL DESIGN: not Clear, which is in the menu
+  assert.deepEqual(await order(10), ['day', 'comment', 'infobut', 'num',
     'goals', 'goallink', 'minusbut', 'undobut', 'subbut', 'foldbut'])
   await page.click('#foldbut')
   assert.deepEqual(await order(4), ['minusbut', 'undobut', 'subbut', 'foldbut'])
@@ -4168,12 +4201,14 @@ qual('screen readers hear the fold button, whether it is folded, and not what it
   for (const sel of FOLDAWAY)
     assert.ok(await page.$eval(sel, (e, ids) => ids.some(id =>
       document.getElementById(id)?.contains(e)), ids), `${sel} in ${ids}`)
-  assert.equal(await page.getByRole('button', { name: 'Clear' }).count(), 1)
+  // FINAL DESIGN: the menu button, not Clear (in the menu), is what folding
+  // hides
+  assert.equal(await page.getByRole('button', { name: 'Help' }).count(), 1)
   await tap(page, '#foldbut')
   assert.equal(await page.getAttribute('#foldbut', 'aria-expanded'), 'false')
   for (const role of ['combobox', 'textbox'])
     assert.equal(await page.getByRole(role).count(), 0, role)
-  assert.equal(await page.getByRole('button', { name: 'Clear' }).count(), 0)
+  assert.equal(await page.getByRole('button', { name: 'Help' }).count(), 0)
   for (const id of ids) assert.ok(await page.$eval('#' + id, e => e.hidden), id)
 })
 
@@ -4707,8 +4742,8 @@ qual('with text at 200% on a phone, the controls still fit', async (page, bee) =
   await tap(page, '#foldbut')
   await tap(page, '#bigbut', 12)
   await tap(page, '#foldbut')
-  const drawer = ['#clearbut', '#loginbut', '#safesum', '#lastdp', '#day', '#comment',
-                  '#infobut']
+  // FINAL DESIGN: Clear is in the menu, and the safesum in the top line
+  const drawer = ['#loginbut', '#lastdp', '#day', '#comment', '#infobut']
   const rest = FOOTER.filter(s => !drawer.includes(s))
   for (const sel of drawer) {
     await page.locator(sel).scrollIntoViewIfNeeded()
@@ -4728,7 +4763,8 @@ qual('with text at 200% on a phone, the controls still fit', async (page, bee) =
 // unfolded, the day, the last datapoint and the goal's link leave 36% (of
 // 320px, in the font these quals get). Folded, it gets all but one row, as
 // ever (see "folded, the big button gets all but one row").
-for (const [width, height] of [[640, 360], [667, 375], [844, 390]])
+// FINAL DESIGN: 568x320 is back, at 58%
+for (const [width, height] of [[568, 320], [640, 360], [667, 375], [844, 390]])
   qual(`a phone turned sideways (${width}x${height}) still has most of its screen for tapping`, async page => {
     await login(page)
     const big = await box(page, '#bigbut')
@@ -4749,7 +4785,8 @@ qual('even a long error leaves room to count and to press every button', async (
   await expectError(page, bee, /502/)
   const big = await box(page, '#bigbut')
   assert.ok(big.height > PHONE.height / 2, JSON.stringify(big))
-  for (const sel of ['#minusbut', '#undobut', '#clearbut', '#infobut', '#goals',
+  // FINAL DESIGN: not Clear, which is in the menu
+  for (const sel of ['#minusbut', '#undobut', '#infobut', '#goals',
                      '#subbut', '#loginbut']) {
     const b = await box(page, sel)
     assert.ok(b.y >= big.height && b.y + b.height <= PHONE.height,
@@ -4952,7 +4989,9 @@ qual('logged out, what needs a goal is grayed out', async page => {
 
 // The ids of the footer's controls smaller than 44 by 44 px, the smallest that
 // Apple recommends for fingers
-const small = page => page.$$eval('.footer :is(button, select, input, a)', es => es
+// FINAL DESIGN: but the username, logged in, plain text (a disabled login
+// button), one line of words
+const small = page => page.$$eval('.footer :is(button, select, input, a):not(#loginbut:disabled)', es => es
   .map(e => [e.id, e.getBoundingClientRect()])
   .filter(([, r]) => r.width < 44 || r.height < 44).map(([id]) => id))
 
@@ -5007,12 +5046,17 @@ qual('with a mouse, what can be clicked looks clickable', async page => {
     await page.mouse.move(0, 0) // so letting go doesn't click it
     await page.mouse.up()
   }
-  for (const sel of ['#minusbut', '#undobut', '#clearbut', '#infobut', '#goals',
+  for (const sel of ['#minusbut', '#undobut', '#infobut', '#goals',
                      '#day', '#goallink', '#subbut', '#foldbut']) await looks(sel)
   assert.equal(await cursor('#loginbut'), 'default') // the username: see its qual
   await tap(page, '#infobut')
   await still(page, '#info')
   await looks('#info .close')
+  // FINAL DESIGN: Clear, in the menu (opened again, as letting go of the mouse
+  // outside the menu closes it)
+  await tap(page, '#infobut')
+  await still(page, '#info')
+  await looks('#clearbut')
 }, DESK)
 
 // Replicata: on a computer, click the big button, and press Tab; then open the
@@ -5041,7 +5085,8 @@ qual('the keyboard focus shows clearly', async page => {
   await page.focus('#infobut')
   await page.keyboard.press('Enter')
   const close = await ring()
-  assert.deepEqual([first.id, close.id], ['clearbut', 'close'])
+  // FINAL DESIGN: the day, with Clear in the menu
+  assert.deepEqual([first.id, close.id], ['day', 'close'])
   for (const r of [first, close]) {
     assert.equal(r.style, 'solid', JSON.stringify(r))
     assert.ok(r.width >= 2 && r.offset > 0, JSON.stringify(r))
@@ -5164,4 +5209,77 @@ qual("what the browser draws itself, like the dropdown's list, is dark", async p
   const bg = await page.evaluate(() => getComputedStyle(document.body
     .appendChild(document.createElement('select'))).backgroundColor)
   assert.ok(contrast(bg, 'rgb(255, 255, 255)') > 4.5, bg)
+})
+
+// ------------------------------------------- FINAL DESIGN: new quals
+
+// Replicata: log in; fold the footer; tap the top line's words; pick pages.
+// Expectata: at the very top of the screen, folded or not, the goal's name and
+// its safesum; the tap counts, like any on the black; and pages' name and
+// safesum once it's picked.
+qual('the top line shows the goal and its safesum, folded or not, and a tap on it counts', async page => {
+  await page.goto(APP)
+  assert.equal(await page.textContent('#topline'), ' ', 'logged out, with no goal')
+  await login(page)
+  await see(page, '#goalname', 'pushups')
+  await see(page, '#safesum', '+2 pushups due by 12am')
+  await tap(page, '#foldbut')
+  assert.ok(await page.isVisible('#goalname') && await page.isVisible('#safesum'))
+  const t = await box(page, '#topline')
+  assert.ok(t.y === 0, JSON.stringify(t))
+  const s = await box(page, '#safesum')
+  await page.touchscreen.tap(s.x + s.width / 2, s.y + s.height / 2)
+  await see(page, '#bigbut', '1')
+  await tap(page, '#foldbut')
+  await choose(page, 'pages')
+  await see(page, '#goalname', 'pages')
+  await see(page, '#safesum', 'safe for 3 days')
+})
+
+// Replicata: with a long safesum, tap 888 (the count as big as it gets), on
+// phones big and small, with text at 200%, and sideways, folded and not.
+// Expectata: the top line never over the count, and only whole lines of it
+// (all of them, where there's room).
+for (const [width, height] of [[390, 844], [320, 568], [844, 390], [568, 320],
+                               [195, 422], [188, 334]])
+  qual(`the top line never covers the count, and shows only whole lines (${width}x${height})`, async (page, bee) => {
+    bee.goals[0].safesum = '+0.73 chapters due in 2 days by 11:59pm'
+    await login(page)
+    await taps(page, 888)
+    for (const fold of [false, true]) {
+      const [t, c, pad, all] = await page.evaluate(() => {
+        const t = document.getElementById('topline')
+        return [t.getBoundingClientRect().toJSON(),
+                document.getElementById('count').getBoundingClientRect().toJSON(),
+                parseFloat(getComputedStyle(t).paddingTop), t.scrollHeight]
+      })
+      assert.ok(t.bottom <= c.top, JSON.stringify({ fold, t, c }))
+      assert.equal((t.height - pad) % 20, 0, JSON.stringify({ fold, t }))
+      if (width >= 320) assert.equal(t.height, all, JSON.stringify({ fold, t, all }))
+      await tap(page, '#foldbut')
+    }
+  }, { viewport: { width, height } })
+
+// Replicata: unfolded, logged in, count pushups with a nose that lands a
+// little below the black area, 20 to 32px (3 to 5mm) below it, anywhere
+// across the screen.
+// Expectata: nothing pressed: no field, no dropdown, no menu, nothing counted
+// or cleared.
+// Resultata (before): Clear, at the left.
+qual('unfolded, a touch a little below the big button presses nothing', async page => {
+  await login(page)
+  await tap(page, '#bigbut', 3)
+  const edge = await page.$eval('#bigbut', e => e.getBoundingClientRect().bottom)
+  const cdp = await page.context().newCDPSession(page)
+  for (const dy of [20, 24, 28, 32]) for (const fx of [0.05, 0.25, 0.5, 0.75, 0.95]) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart',
+      touchPoints: [{ x: PHONE.width * fx, y: edge + dy, radiusX: 16, radiusY: 16 }] })
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  }
+  await settled(page)
+  assert.equal(await count(page), 3)
+  assert.ok(!await page.$eval('#info', d => d.open))
+  assert.ok(['bigbut', ''].includes(await page.evaluate(() => document.activeElement.id)),
+            await page.evaluate(() => document.activeElement.id))
+  assert.equal(page.url(), APP + '?goal=pushups')
 })

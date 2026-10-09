@@ -313,6 +313,8 @@ function render() {
   $('num').value = minus ? '-' : v
   // As wide as what it says, typed or not (see style.css)
   $('num').style.setProperty('--len', $('num').value.length)
+  // The top line: the goal's name, and its safesum (none, with no goal)
+  $('goalname').textContent = g.slug
   $('safesum').textContent = g.safesum
   $('safesum').setAttribute('aria-busy', g.queued) // grayed out: out of date
   // The datapoint added to the goal last, as Beeminder's own site shows it:
@@ -594,6 +596,8 @@ $('goals').addEventListener('change', () => {
 // shows your username instead, and can't be pressed (see render).
 $('loginbut').addEventListener('click',
                                () => beeminder.login(clientId, redirectUri))
+// The menu button opens the help, which is the menu too: Clear is in it, and
+// closes it, as its form says (see index.html)
 $('infobut').addEventListener('click', () => $('info').showModal())
 // Tapping outside the help closes it: taps on the backdrop go to the dialog
 // element but taps on what's inside it stop there

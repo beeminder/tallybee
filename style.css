@@ -79,6 +79,27 @@ body {
   right: 0;
 }
 
+/* The stage, the big button with the top line and the infinibee over its top
+   (see index.html), takes all the height the footer doesn't. Never less than
+   a fifth of the screen, even where the footer, unfolded, would leave less, as
+   with text at 200%: the footer's drawer scrolls instead (see .footer), so
+   that there's always room to tap. The big button fills it, and what's over
+   its top lies in the same place, cut off where it would stick out below. The
+   count's size, and how much of the top line shows, depend on the stage's
+   (see #count and #topline): a cqw is 1% of its width, and a cqh 1% of its
+   height. --biggest is how big the count can be: a font size of 40% of the
+   width, as with up to 3 characters, but never taller than the big button. */
+#stage {
+  flex: 1;
+  min-height: 20%;
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  overflow: hidden;
+  container-type: size;
+  --biggest: min(80cqh, 40cqw);
+}
+#stage > * { grid-area: 1 / 1; }
+
 #bigbut { /* Big button */
   /* Next 3 lines make it so clicking the text on the button never 
      selects/highlights the text. Without this you see ugly flickering when you
@@ -91,26 +112,19 @@ body {
      can take, to pull the page down to reload it; it then counts nothing (see
      script.js). No zooming. */
   touch-action: pan-y;
-  flex: 1;
-  /* Never less than a fifth of the screen, even where the footer, unfolded,
-     would leave less, as with text at 200%: the footer's drawer scrolls
-     instead (see .footer), so that there's always room to tap */
-  min-height: 20%;
   display: grid;
   place-items: center;
   overflow: hidden;
-  container-type: size; /* so the count's size can depend on the button's */
   color: var(--blue);
   background-color: black;
   cursor: pointer;
 }
 
 /* The count's font size is 40% of the big button's width for up to 3
-   characters and shrinks to fit more (script.js sets --len to the number of
-   characters) but is never taller than the button. (A cqw is 1% of the width,
-   and a cqh 1% of the height, of the container, here the big button.) */
+   characters (--biggest: see #stage) and shrinks to fit more (script.js sets
+   --len to the number of characters) but is never taller than the button. */
 #count {
-  font-size: min(80cqh, 120cqw / max(3, var(--len, 1)));
+  font-size: min(var(--biggest), 120cqw / max(3, var(--len, 1)));
   line-height: 1;
   font-variant-numeric: tabular-nums;
   font-weight: 500;
@@ -123,6 +137,46 @@ body {
 /* What's hidden stays hidden, even what gets a display of its own below */
 [hidden] { display: none !important; }
 
+/* What's over the top of the big button, the top line and, below it, the
+   infinibee, takes no touches: they go right through it, to the big button,
+   and count */
+#top {
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+/* The top line, small and gray (the goal's name a shade lighter), centered,
+   each part on the line below where it won't fit beside the one before, and
+   broken where even it alone won't fit. It never covers the count: it shows
+   as many of its lines as fit above the biggest the count can be (see
+   #stage), whose digits are about 0.72 times its font size tall (all that the
+   count's box is: see #count), less 4px of room; where none fit, as on a
+   phone with text at 200%, unfolded, none show. (Its lines are 20px apart,
+   with no room between them, so that only whole lines show.) While Beeminder
+   updates the goal, as after getting a datapoint, the safesum is out of date,
+   and grayed out. */
+#topline {
+  align-self: stretch;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  column-gap: 12px;
+  max-height: round(down, (100cqh - 0.72 * var(--biggest)) / 2 - 16px, 20px);
+  overflow: hidden;
+  padding: 12px max(16px, 50% - 400px) 0;
+  color: var(--text2);
+  font-size: 16px;
+  line-height: 20px;
+  text-align: center;
+  overflow-wrap: anywhere;
+  -webkit-user-select: none;
+  user-select: none;
+}
+#goalname { color: var(--text); }
+#safesum[aria-busy=true] { opacity: var(--grayed); }
+
 /* The footer: a status line, empty at first, over rows of controls, on
    a 4px grid: 16px margins, 12px between rows, 8px between neighbors, and
    controls 44px tall, the smallest touch target Apple recommends. The 16px on
@@ -130,7 +184,9 @@ body {
    button: phones give a touch to the nearest clickable thing within a
    finger's width of it (in Chrome, up to 16px away). The big button, which
    can take the keyboard's focus, counts as clickable too, so a touch just
-   below it, in the top of the footer, counts. Where there's room for both,
+   below it, in the top of the footer, counts. And logged in, the first row is
+   the info line, words only, so that a touch landing a little lower still
+   presses nothing (see #infoline). Where there's room for both,
    two rows share a line (see #drawer and #bar), leaving more of a landscape
    phone for tapping. The rows are at most 800px wide, centered. The footer is
    never taller than the screen, less the fifth of it that the big button
@@ -159,20 +215,20 @@ body {
   line-height: 1.25;
 }
 
-/* The drawer takes two rows, Clear's over the comment's, and the bar two, the
-   send row over the rest; where there's room, as on a phone turned sideways,
-   each takes one line, leaving more of the screen for tapping. The send row
-   is at least as wide as its number, dropdown, and link, with room in the
-   dropdown for a goal name like "pushups", so that it never takes two lines of
-   its own beside the rest, or cuts short a short goal name to share a line.
-   The rest of the bar keeps to the right, so that it's in the same place
+/* The drawer takes two rows, the info line over the comment's, and the bar
+   two, the send row over the rest; where there's room, as on a phone turned
+   sideways, each takes one line, leaving more of the screen for tapping. The
+   send row is at least as wide as its number, dropdown, and link, with room in
+   the dropdown for a goal name like "pushups", so that it never takes two
+   lines of its own beside the rest, or cuts short a short goal name to share a
+   line. The rest of the bar keeps to the right, so that it's in the same place
    whether the send row shares its line, or has one of its own, or is folded
-   away. The drawer's 4px all around, which its margins take back, are room
-   for the rings that show where the keyboard's focus is, since it cuts off
+   away. The drawer's 4px all around, which its margins take back, are room for
+   the rings that show where the keyboard's focus is, since it cuts off
    whatever sticks out of it once it can scroll, and its scroll padding keeps
-   that room when the keyboard's focus scrolls a control into view. Where
-   the footer gets squeezed, as with text at 200%, the drawer gives way,
-   scrolling, after a message's lines past its first (see #status). */
+   that room when the keyboard's focus scrolls a control into view. Where the
+   footer gets squeezed, as with text at 200%, the drawer gives way, scrolling,
+   after a message's lines past its first (see #status). */
 #drawer, #bar { display: flex; flex-wrap: wrap; }
 #drawer { gap: 12px 16px; overflow-y: auto; padding: 4px; margin: -4px -4px 8px;
           scroll-padding: 4px; }
@@ -208,7 +264,8 @@ body {
 #status[data-kind=ok]   { color: var(--green); }
 #status[data-kind=err]  { color: var(--red); }
 
-.footer button, .footer select, .footer input, #goallink {
+/* The controls, in the footer and in the menu (see .menu) */
+:is(.footer, .menu) :is(button, select, input), #goallink {
   appearance: none;
   box-sizing: border-box; /* what text fields don't have, unlike the rest */
   min-width: 44px;
@@ -229,18 +286,19 @@ body {
 
 /* Grayed out: whatever can't be used now, at once, with no fade, like the
    goal's link with no goal to link to */
-.footer :disabled, #goallink:not([href]) { opacity: var(--grayed); transition: none; }
+:is(.footer, .menu) :disabled, #goallink:not([href]) {
+  opacity: var(--grayed); transition: none; }
 
-/* The login button (the username, once logged in) follows Clear. Where the
-   row is too narrow for its label for when logged out, that label takes two
-   lines beside Clear, rather than a line of its own, or getting cut off: it
-   can squeeze down to its longest word (min-content), and grows as wide as
-   the whole label where there's room. A username, all one word, squeezes not
-   at all: the safesum goes below it first. Only where even the username
-   alone won't fit does it break, to stay whole on the screen. */
+/* The info line: the login button (the username, once logged in), as wide
+   as its label, and then the last datapoint, in gray, in the room left, on
+   one line, cut short (…) if need be, as its comment can be long, like the
+   one TallyBee sends, so that a new one moves nothing. Where the line is too
+   narrow for the login button's label, that label takes two lines, rather
+   than getting cut off. A username, all one word, breaks only where even it
+   alone won't fit, to stay whole on the screen. */
+#infoline { column-gap: 12px; }
 #loginbut {
-  flex: 1 1 min-content;
-  max-width: max-content;
+  flex: 0 1 auto;
   min-width: 0;
   padding-block: 10px; /* for when its label takes two lines */
   white-space: normal;
@@ -248,17 +306,28 @@ body {
   overflow-wrap: break-word;
 }
 /* Logged in, it can't be pressed, and it's plain text, the username, not a
-   grayed-out button */
-#loginbut:disabled { opacity: 1; background-color: transparent; }
+   grayed-out button: one line of words, no taller than they are, so that
+   the info line leaves the controls below it out of reach of a touch a little
+   below the big button */
+#loginbut:disabled { opacity: 1; background-color: transparent; min-height: 0;
+                     padding: 0; border-width: 0; }
+#lastdp {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text2);
+  text-overflow: ellipsis;
+}
 
-#infobut { /* the help button, round, at the right */
+/* The menu button, round, at the right of the comment's row, its three lines
+   in the middle */
+#infobut {
   flex: none;
   width: 44px;
   padding: 0;
   border-radius: 50%;
-  font-size: 18px;
-  font-weight: 600;
 }
+#infobut svg { display: block; margin: auto; }
 
 /* The fold button, at the right of the bar, is round too, being as small as
    a control can be: 44px wide, with 22px corners. Its chevron points up, to
@@ -274,14 +343,14 @@ body {
    in the buttons' capsule shape. Its 16px text keeps iPhones from zooming in
    when it gets the focus. */
 #comment {
-  flex: 1 1 0; /* the room the day and the ? leave */
+  flex: 1 1 0; /* the room the day and the menu button leave */
   border-color: var(--line);
   background-color: black;
 }
 #comment::placeholder { color: var(--text2); opacity: 1; }
 
 /* Clear, which wipes out the count (only an UNDO right after it can bring it
-   back), stands apart, at the left, and looks it: red, Apple's color for
+   back), stands apart, in the menu, and looks it: red, Apple's color for
    buttons that destroy something, and outlined rather than filled, like no
    other button. (Red on the other buttons' gray would be too faint to read,
    hence its faint red hover and pressed colors, below.) */
@@ -327,7 +396,7 @@ body {
 }
 #numform { display: contents; }
 
-/* The goal's link, round, like the ?, its arrow in the middle */
+/* The goal's link, round, like the menu button, its arrow in the middle */
 #goallink {
   flex: none;
   display: grid;
@@ -353,18 +422,15 @@ body {
 }
 #subbut:enabled { background-color: var(--yellow); color: black; }
 
-/* What Beeminder says about the goal, its safesum over its last datapoint,
-   fills the rest of Clear's row, wrapping beside the login button, or below
-   it if that would leave it too narrow. With no goal, it's empty and takes no
-   room. While Beeminder updates the goal, as after getting a datapoint, the
-   safesum is out of date, and grayed out. The last datapoint takes one line,
-   cut short (…) if need be, as its comment can be long, like the one TallyBee
-   sends, so that a new one moves nothing. */
-#goalinfo { flex: 1 1 0; min-width: 6em; color: var(--text2); white-space: normal; }
-#goalinfo:has(#safesum:empty) { display: none; }
-#safesum { display: block; overflow-wrap: anywhere; }
-#lastdp { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#safesum[aria-busy=true] { opacity: var(--grayed); }
+/* The menu's Clear, atop the help (see index.html), set off from it by a
+   hairline, in the footer's size of text */
+.menu {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: 16px;
+  line-height: 1.25;
+}
 
 /* Interaction states. With a mouse, the hand is over whatever can be clicked.
    On devices that can hover, what's under the mouse turns a shade lighter (on
@@ -372,16 +438,17 @@ body {
    stick after a tap.)
    Pressing shows at once, and letting go fades back. A ring, set off from the
    control so that it shows on any color, marks where the keyboard's focus is. */
-.footer :is(button, select):enabled, #goallink[href], .close { cursor: pointer; }
+:is(.footer, .menu) :is(button, select):enabled, #goallink[href], .close {
+  cursor: pointer; }
 @media (hover: hover) {
-  .footer :is(button, select):enabled:hover, #goallink[href]:hover {
+  :is(.footer, .menu) :is(button, select):enabled:hover, #goallink[href]:hover {
     background-color: var(--fill-hover);
   }
   #subbut:enabled:hover { background-color: var(--yellow-hover); }
   #clearbut:enabled:hover { background-color: var(--red-hover); }
   .close:hover { background-color: rgb(0 0 0 / 0.08); }
 }
-.footer :is(button, select):enabled:active, #goallink[href]:active {
+:is(.footer, .menu) :is(button, select):enabled:active, #goallink[href]:active {
   background-color: var(--fill-press);
   transition: none;
 }
@@ -392,16 +459,13 @@ body {
 /* The big button fills the screen's width, so its ring goes just inside it */
 #bigbut:focus-visible { outline-offset: -2px; }
 
-/* The infinibee flies over the top of the big button while we wait on
-   Beeminder, not getting in the way of taps. For people who ask their device
-   for less motion, it just sits there, in the middle of its figure eight. */
+/* The infinibee flies over the top of the big button, just below the top
+   line, while we wait on Beeminder, not getting in the way of taps (see
+   #top). For people who ask their device for less motion, it just sits there,
+   in the middle of its figure eight. */
 #infinibee {
-  position: fixed;
-  top: 8%;
-  left: 50%;
-  translate: -50%;
   width: min(80vw, 360px);
-  pointer-events: none;
+  margin-top: 8px;
 }
 #infinibee svg { display: block; }
 /* The flight path is Beeminder's (its lemniscate-bernoulli keyframes, in

@@ -29,12 +29,22 @@
 <meta name="twitter:card" content="summary_large_image">
 </head>
 <body>
-<div class='versiontag'>v2026.10.08a&nbsp;</div>
+<div class='versiontag'>v2026.10.08b&nbsp;</div>
+<!-- The stage: the big button, and, over its top, the top line and the
+     infinibee, which taps go right through, to the big button (see
+     style.css) -->
+<div id="stage">
 <!-- The big button is a button to the keyboard too: see script.js. Its number
      is script.js's to show: till then, it shows none, rather than one that may
      be wrong, as on an odometer-like goal. Screen readers describe it in the
      help's words (see #tapping). -->
 <div id="bigbut" role="button" tabindex="0" aria-describedby="tapping"><span id="count"></span></div>
+<div id="top">
+<!-- The top line: what the goal is, and what Beeminder says about it, small
+     and gray, at the very top of the screen, folded or not: the goal's name
+     (its slug), and its safesum, Beeminder's summary of what's due, like "+2
+     pushups due by 12am" (see script.js). With no goal, it's empty. -->
+<div id="topline"><span id="goalname"></span> <span id="safesum"></span></div>
 <!-- While we wait on Beeminder, the infinibee (Beeminder's bee logo, from
      beeminder.com/press) flies a lemniscate (a figure eight; see style.css),
      as on Beeminder's own site, on a canvas the shape of Beeminder's, 400 by
@@ -44,6 +54,8 @@
 <image href="infinibee.svg" x="-25" y="-25" width="50" height="50"/>
 </svg>
 </div>
+</div> <!-- top -->
+</div> <!-- stage -->
 
 <div class="footer">
 <!-- The status line comes first, so that a message, like the one Submit shows
@@ -55,16 +67,13 @@
      bar below, folds away and brings back (see script.js). The bar itself
      never folds away, and never moves. -->
 <div id="drawer">
-<!-- Clear, which wipes out the count (though UNDO can bring it back), sits
-     apart from the rest. -->
-<div>
-<!-- label for the button that zeroes the count without submitting it
-     (Beedroid's is "Clear") -->
-<button id="clearbut">Clear</button>
+<!-- The info line: who's logged in (or, logged out, the login button), and
+     the datapoint added to the goal last, as Beeminder's own site shows it
+     (see script.js). Logged in, it's words only, which a touch just below the
+     big button lands on, rather than on a control (see style.css). -->
+<div id="infoline">
 <button id="loginbut"></button>
-<!-- What Beeminder says about the goal: its safesum, and the datapoint added
-     to it last, as Beeminder's own site shows it (see script.js) -->
-<div id="goalinfo"><span id="safesum"></span><span id="lastdp"></span></div>
+<span id="lastdp"></span>
 </div>
 <div>
 <!-- The day the pending datapoint is for, today unless picked otherwise, as
@@ -79,7 +88,12 @@
      datapoint's comment (see script.js). -->
 <input id="comment" aria-label="Comment" placeholder="Comment (optional)"
   autocomplete="off" enterkeyhint="done" disabled>
-<button id="infobut" aria-label="Help">?</button>
+<!-- The menu button: three lines, the usual sign of a menu, which opens the
+     help, now a menu too, with Clear in it (see #info) -->
+<button id="infobut" aria-label="Help" aria-haspopup="dialog"><svg
+  viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
+  stroke-width="2" stroke-linecap="round" aria-hidden="true"><path
+  d="M2.5 3.5h11M2.5 8h11M2.5 12.5h11"/></svg></button>
 </div>
 </div> <!-- drawer -->
 <!-- The bar: all that a counting session needs. The send row is in the bar,
@@ -123,6 +137,8 @@
 </div> <!-- bar -->
 </div> <!-- footer -->
 
+<!-- The help, which is the menu too: a sheet that the menu button opens, with
+     Clear atop the help and credits -->
 <dialog id="info" aria-labelledby="infotitle">
 <div class="modal-content">
 <div class="modal-header">
@@ -130,6 +146,15 @@
   <h2 id="infotitle">TallyBee</h2>
 </div>
 <div class="modal-body">
+<!-- Clear, which wipes out the count (though UNDO can bring it back), sits
+     apart from the rest, in the menu, far from UNDO. Its form closes the menu
+     once it's pressed, as picking anything in a menu does, showing the count,
+     now 0, and UNDO. -->
+<form method="dialog" class="menu">
+<!-- label for the button that zeroes the count without submitting it
+     (Beedroid's is "Clear") -->
+<button id="clearbut">Clear</button>
+</form>
 <p>
 This replicates the tally counter feature of Beedroid.
 <span id="tapping">Just tap/click your screen to keep count of something.</span>
