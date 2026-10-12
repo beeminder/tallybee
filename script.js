@@ -4,21 +4,27 @@ import * as beeminder from './beeminder.js';
 function $(id) { return document.getElementById(id) } // to be jQuery-esque
 // -----------------------------------------------------------------------------
 
-const clientId = "6qi9cv7g647fisgzlz0flxwee"
-const redirectUri = "https://tallybee.beeminder.com/"
-// Beeminder sends a login back only to that URL, so a copy of TallyBee served
-// from this directory (like with `python3 -m http.server`, at
-// http://localhost:8000) can't log in itself. It can use the live TallyBee's
-// login, though, as Beeminder lets any page call its API: in the browser's
+// Beeminder's ID for TallyBee as an app that people log in to Beeminder from
+// (a client, in OAuth's jargon), for each place it's served from (an origin,
+// in the web's jargon): here, just the live TallyBee. A copy served elsewhere,
+// for trying out changes, logs in as an app of its own, registered with
+// Beeminder (at beeminder.com/apps/new) with the copy's origin, with no slash
+// after it, as where Beeminder sends logins back to (the redirect URL), once
+// whatever serves the copy adds that app's ID here as it serves this file. A
+// copy that's not in here can't log in itself: its login button fails loudly.
+const CLIENTS = {
+  'https://tallybee.beeminder.com': '6qi9cv7g647fisgzlz0flxwee',
+}
+const clientId = CLIENTS[location.origin]
+const redirectUri = location.origin + '/'
+// A copy that's not in CLIENTS, like one served from this directory with
+// `python3 -m http.server`, at http://localhost:8000, can still use the live
+// TallyBee's login, as Beeminder lets any page call its API: in the browser's
 // console on tallybee.beeminder.com, logged in, copy what
 // localStorage.getItem('beeminder-token') says, and on the copy, paste it into
 // localStorage.setItem('beeminder-token', ...) and reload. (Beeminder keeps one
 // token per app, so it's the same login in both: the copy's Submit sends
-// datapoints to your real goals. And the copy's login button, there once the
-// copy is logged out, logs you out everywhere: Beeminder makes a new token,
-// which stops the old one working on every device, and sends it to the live
-// TallyBee, which turns it away, as a login it didn't ask for: see UNASKED in
-// beeminder.js.)
+// datapoints to your real goals.)
 
 // What to tell the user when another TallyBee window (or tab, or home-screen
 // icon) changed the pending datapoint (see requestid, below) while this one was
@@ -313,8 +319,8 @@ function render() {
   $('num').value = minus ? '-' : v
   // As wide as what it says, typed or not (see style.css)
   $('num').style.setProperty('--len', $('num').value.length)
-  // The top line: the goal's name, and its safesum (none, with no goal)
-  $('goalname').textContent = g.slug
+  // The top line: the goal's name (see the goal's link, below), and its
+  // safesum (none, with no goal)
   $('safesum').textContent = g.safesum
   $('safesum').setAttribute('aria-busy', g.queued) // grayed out: out of date
   // The datapoint added to the goal last, as Beeminder's own site shows it:
@@ -345,19 +351,28 @@ function render() {
   // And with no goals, like when logged out, there's nothing to pick, and no
   // telling what day it is for the goal.
   $('goals').disabled = $('day').disabled = busy || goals.length === 0
-  // The goal's page on Beeminder; with no goal, no link (grayed out: see
-  // style.css)
-  if (g === NOGOAL) $('goallink').removeAttribute('href')
-  else $('goallink').href = `https://www.beeminder.com/${user.username}/${g.slug}`
+  // The goal's name on the top line, after the user's, as Beeminder writes a
+  // goal, like alice/pushups, as README open question 5 has it
+  // ("username/goalname"); and the goal's page on Beeminder, its link's words
+  // saying where it goes, as the README's wishlist 4 has it:
+  // "beeminder.com/USER/GOAL". With no goal, the user's name alone (none,
+  // before the goals load), and just beeminder.com, with no link (grayed out:
+  // see style.css).
+  if (g === NOGOAL) { $('goalname').textContent = user.username
+                      $('goallink').textContent = 'beeminder.com'
+                      $('goallink').removeAttribute('href') }
+  else { $('goalname').textContent = `${user.username}/${g.slug}`
+         $('goallink').textContent = `beeminder.com/${user.username}/${g.slug}`
+         $('goallink').href = `https://www.beeminder.com/${user.username}/${g.slug}` }
   $('infinibee').hidden = !busy
-  // Login button's label when not logged in (when logged
-  // in it shows the username). graph.beeminder.com's login button says "Log in
-  // with your Beeminder account".
-  $('loginbut').textContent = beeminder.getUsername() ?? 'Log in with your Beeminder account'
-  // Logged in, it only says who's logged in: pressing it would log in again,
-  // which gets a new token, and so logs TallyBee out on your other devices
-  // (Beeminder keeps one token per app)
-  $('loginbut').disabled = !out
+  // Login button's label (logged in, it's hidden: see below).
+  // graph.beeminder.com's login button says "Log in with your Beeminder
+  // account".
+  $('loginbut').textContent = 'Log in with your Beeminder account'
+  // Logged in, it's hidden, as the top line says who's logged in (see
+  // #goalname): pressing it would log in again, which gets a new token, and so
+  // logs TallyBee out on your other devices (Beeminder keeps one token per app)
+  $('loginbut').hidden = !out
 }
 
 // Show message msg in the status line, styled according to kind: busy, ok, err
@@ -589,12 +604,11 @@ $('goals').addEventListener('change', () => {
 })
 // The login button sends you to Beeminder, which sends you right back (with an
 // access token) if you've authorized TallyBee before. When you're logged in, it
-// shows your username instead, and can't be pressed (see render).
+// is hidden (see render).
 $('loginbut').addEventListener('click',
                                () => beeminder.login(clientId, redirectUri))
 // The menu button opens the menu, and the help button, in the menu, closes the
-// menu and opens the help. (Clear, in the menu, closes it as its form says: see
-// index.html.)
+// menu and opens the help.
 $('menubut').addEventListener('click', () => $('menu').showModal())
 $('infobut').addEventListener('click', () => { $('menu').close()
                                                $('info').showModal() })

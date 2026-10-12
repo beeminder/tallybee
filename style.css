@@ -148,9 +148,9 @@ body {
   align-items: center;
   pointer-events: none;
 }
-/* The top line, small and gray (the goal's name a shade lighter), at the top
-   left, as the title of an app's top bar is, with the menu button at the top
-   right, as usual: each part on the line below where it won't fit beside the
+/* The top line, small and gray (the goal's name, after its user's, a shade
+   lighter), at the top left, as the title of an app's top bar is, with the
+   menu button at the top right, as usual: each part on the line below where it won't fit beside the
    one before, and broken where even it alone won't fit. It keeps clear of the
    menu button's column: 68px, the button's 44 and the 16px and 8px around it.
    It never covers the count: it shows as many of its lines as fit above the
@@ -185,11 +185,11 @@ body {
    button: phones give a touch to the nearest clickable thing within a
    finger's width of it (in Chrome, up to 16px away). The big button, which
    can take the keyboard's focus, counts as clickable too, so a touch just
-   below it, in the top of the footer, counts. And the first row is the info
-   line, words only, so that a touch landing a little lower still presses
-   nothing (see #infoline). Where there's room for both, the drawer's two rows
-   share a line (see #drawer), leaving more of a landscape phone for tapping.
-   The rows are at most 800px wide, centered. The footer is
+   below it, in the top of the footer, counts. And logged in, the first row
+   is the info line, words only, so that a touch landing a little lower still
+   presses nothing (see #infoline). Where there's room for both, the
+   drawer's two rows share a line (see #drawer), leaving more of a landscape
+   phone for tapping. The rows are at most 800px wide, centered. The footer is
    never taller than the screen, less the fifth of it that the big button
    always keeps: where it would be, as on a small phone with its text made
    huge, what's above the bar scrolls, so that the bar, fold button and all,
@@ -239,6 +239,11 @@ body {
   margin-left: auto;
   justify-content: flex-end;
 }
+/* The bar's buttons have 8px at their sides, not the 12px of the other
+   controls, so that all five, −1, Clear, UNDO, Submit and the fold button,
+   fit in one row on phones 360px wide and up, with all of "Submit (∑)" on
+   one line from 375px up, as on iPhones */
+#bar button { padding-inline: 8px; }
 
 /* Each row is a line of controls, which wrap only if they must, like when
    zoomed way in. (Else the dropdown, as wide as its longest goal, would set
@@ -252,21 +257,29 @@ body {
   white-space: nowrap;
 }
 
-/* The status line takes no room till it has something to say, and at most 4
-   lines (of 1.25em), scrolling past that, so that even an error that's a whole
-   web page leaves room to tap. Where the footer gets squeezed, as with text at
-   200%, a message's lines past its first give way first, and then the drawer
-   (see #drawer); its first line stays whole, so that it can be read. */
-#status { max-height: 5em; overflow-y: auto; overflow-wrap: anywhere;
-          flex-shrink: 1000; }
-#status:not(:empty) { margin-bottom: 12px; min-height: 1.25em; }
+/* The status line takes no room till it has something to say, and at most
+   the whole lines (of 1.25em) that fit in a tenth of the screen, scrolling
+   past that, so that even an error that's a whole web page leaves room to
+   tap, even folded with text at 200%: 4 lines on a phone 844px tall, 2 with
+   text at 200%. (A tenth of svh, the height of the page with any address bar
+   showing, which this page, never scrolling, always has; see body.) Where the
+   footer gets squeezed, as with text at 200%, a message's lines past its first
+   give way first, and then the drawer (see #drawer); its first line stays
+   whole, so that it can be read. The 2px at its bottom, which its margin
+   gives back, are room for letters that reach below their line, as in fonts
+   taller than the lines they're set in, like Noto Sans, so that a message that
+   fits has nothing to scroll, and no scroll bar. */
+#status { max-height: round(down, 10svh, 1.25em); overflow-y: auto;
+          overflow-wrap: anywhere; flex-shrink: 1000; }
+#status:not(:empty) { padding-bottom: 2px; margin-bottom: 10px;
+                      min-height: 1.25em; }
 #status[data-kind=busy] { color: var(--yellow); }
 #status[data-kind=ok]   { color: var(--green); }
 #status[data-kind=err]  { color: var(--red); }
 
 /* The controls, in the footer, in the menu (see .menu), and over the big
    button (the menu button: see #menubut) */
-:is(.footer, .menu) :is(button, select, input), #goallink, #menubut {
+:is(.footer, .menu) :is(button, select, input), #menubut {
   appearance: none;
   box-sizing: border-box; /* what text fields don't have, unlike the rest */
   min-width: 44px;
@@ -290,12 +303,22 @@ body {
 :is(.footer, .menu) :disabled, #goallink:not([href]) {
   opacity: var(--grayed); transition: none; }
 
-/* The info line: the last datapoint, in gray, on one line, cut short (…) if
-   need be, as its comment can be long, like the one TallyBee sends, so that a
-   new one moves nothing; and one line tall even with no datapoint to show, so
-   that the controls below it stay out of reach of a touch a little below the
-   big button */
-#infoline { min-height: 20px; }
+/* The info line: logged out, the login button, as wide as its label, and
+   then the last datapoint, in gray, in the room left, on one line, cut short
+   (…) if need be, as its comment can be long, like the one TallyBee sends, so
+   that a new one moves nothing; and one line tall even with no datapoint to
+   show, so that, logged in, with no login button, the controls below it stay
+   out of reach of a touch a little below the big button. Where the line is
+   too narrow for the login button's label, that label takes two lines, rather
+   than getting cut off. */
+#infoline { min-height: 20px; column-gap: 12px; }
+#loginbut {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding-block: 10px; /* for when its label takes two lines */
+  white-space: normal;
+  text-wrap: balance;
+}
 #lastdp {
   flex: 1 1 0;
   min-width: 0;
@@ -303,22 +326,6 @@ body {
   color: var(--text2);
   text-overflow: ellipsis;
 }
-
-/* The login button (the username, once logged in) heads the menu, as wide as
-   its label. Where the menu is too narrow for its label, that label takes two
-   lines, rather than getting cut off. A username, all one word, breaks only
-   where even it alone won't fit, to stay whole on the screen. */
-#loginbut {
-  flex: 0 1 auto;
-  min-width: 0;
-  padding-block: 10px; /* for when its label takes two lines */
-  white-space: normal;
-  text-wrap: balance;
-  overflow-wrap: break-word;
-}
-/* Logged in, it can't be pressed, and it's plain text, the username, not a
-   grayed-out button */
-#loginbut:disabled { opacity: 1; background-color: transparent; }
 
 /* The fold button, at the right of the bar, is round too, being as small as
    a control can be: 44px wide, with 22px corners. Its chevron points up, to
@@ -343,19 +350,19 @@ body {
 #comment { flex: 1 1 0; min-width: 4em; }
 #comment::placeholder { color: var(--text2); opacity: 1; }
 
-/* Clear, which wipes out the count (only an UNDO right after it can bring it
-   back), stands apart, in the menu, and looks it: red, Apple's color for
-   buttons that destroy something, and outlined rather than filled, like no
-   other button. (Red on the other buttons' gray would be too faint to read,
-   hence its faint red hover and pressed colors, below.) */
+/* Clear, which wipes out the count (though UNDO can bring it back), sits
+   between −1 and UNDO, in the bar, and looks unlike them: red, Apple's color
+   for buttons that destroy something, and outlined rather than filled, like
+   no other button. (Red on the other buttons' gray would be too faint to
+   read, hence its faint red hover and pressed colors, below.) */
 #clearbut {
   color: var(--red);
   background-color: transparent;
   border-color: var(--red-line);
 }
 
-/* The goal's dropdown, in the menu, takes the room its row leaves beside the
-   goal's link, goals or no goals, but no more than the longest a goal's name
+/* The goal's dropdown, in the menu, takes the room of its row, as wide as the
+   menu, goals or no goals, but no more than the longest a goal's name
    can be, 20 characters (and its padding and border) */
 #goals { flex: 1 1 0; min-width: 5em; max-width: calc(20ch + 40px); }
 /* The day's dropdown is as wide as the day picked, like "Today (2nd)" */
@@ -389,16 +396,18 @@ body {
 }
 #numform { display: contents; }
 
-/* The goal's link, in the menu beside the dropdown, round, like the menu
-   button, its arrow in the middle */
+/* The goal's link, in the menu under the dropdown: a plain link, underlined
+   words in the yellow of the help's links, broken where even they alone
+   won't fit, to stay whole on the screen; and as tall as the controls, 44px,
+   so that it's as easy to tap. Under the mouse it's a shade darker, and
+   another when pressed, as Submit's yellow is (see below). */
 #goallink {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 44px;
-  padding: 0;
-  border-radius: 50%;
-  text-decoration: none;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--yellow);
+  overflow-wrap: anywhere;
+  transition: color 120ms ease-out, opacity 120ms ease-out;
 }
 
 /* The menu button, round, at the top right corner of the screen, 16px from
@@ -438,6 +447,9 @@ body {
   font-size: 16px;
   line-height: 1.25;
 }
+/* The menu, which has the keyboard's focus as it opens (see index.html), gets
+   no ring for it: it's the sheet that just opened */
+.menu:focus { outline: none; }
 .menu > * {
   display: flex;
   align-items: center;
@@ -447,27 +459,27 @@ body {
 
 /* Interaction states. With a mouse, the hand is over whatever can be clicked.
    On devices that can hover, what's under the mouse turns a shade lighter (on
-   yellow, darker, and Clear, faintly red). (On phones a hover color would
-   stick after a tap.)
+   yellow, and the goal's yellow link, darker, and Clear, faintly red). (On
+   phones a hover color would stick after a tap.)
    Pressing shows at once, and letting go fades back. A ring, set off from the
    control so that it shows on any color, marks where the keyboard's focus is. */
 :is(.footer, .menu) :is(button, select):enabled, #goallink[href], #menubut, .close {
   cursor: pointer; }
 @media (hover: hover) {
-  :is(.footer, .menu) :is(button, select):enabled:hover, #goallink[href]:hover,
-  #menubut:hover {
+  :is(.footer, .menu) :is(button, select):enabled:hover, #menubut:hover {
     background-color: var(--fill-hover);
   }
   #subbut:enabled:hover { background-color: var(--yellow-hover); }
+  #goallink[href]:hover { color: var(--yellow-hover); }
   #clearbut:enabled:hover { background-color: var(--red-hover); }
   .close:hover { background-color: rgb(0 0 0 / 0.08); }
 }
-:is(.footer, .menu) :is(button, select):enabled:active, #goallink[href]:active,
-#menubut:active {
+:is(.footer, .menu) :is(button, select):enabled:active, #menubut:active {
   background-color: var(--fill-press);
   transition: none;
 }
 #subbut:enabled:active { background-color: var(--yellow-press); }
+#goallink[href]:active { color: var(--yellow-press); transition: none; }
 #clearbut:enabled:active { background-color: var(--red-press); }
 .close:active { background-color: rgb(0 0 0 / 0.16); transition: none; }
 :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
@@ -498,9 +510,9 @@ body {
 @keyframes fly { to { offset-distance: 100%; } }
 @media (prefers-reduced-motion: reduce) { #infinibee image { offset-path: none; } }
 
-/* The menu, and the help, are sheets that slide up from the bottom. If the
-   screen is too short for one, it scrolls, with the help's header and its ×
-   staying put. */
+/* The help is a sheet that slides up from the bottom (and the menu drops
+   down from the menu button: see #menu). If the screen is too short for one,
+   it scrolls, with the help's header and its × staying put. */
 dialog {
   margin: auto auto 0; /* at the bottom, and centered if there's room */
   width: 100%;
@@ -552,6 +564,24 @@ dialog::backdrop {
 .modal-body p + p { margin-top: 16px; }
 .modal-body a { color: var(--yellow); }
 
+/* The menu drops down from the menu button, at the top right of the screen,
+   as menus do from the button that opens them: just under it, 8px below the
+   button's 44px, which are 16px from the top, with its right edge lined up
+   with the button's, 16px from the screen's; as wide as its widest row needs,
+   and no wider than the screen leaves; and with a hairline around it, to set
+   it off from the black. It grows out of the button's corner as it opens. If
+   the screen is too short for it, it scrolls, leaving 16px below it. */
+#menu {
+  margin: calc(16px + 44px + 8px) 16px auto auto;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  max-height: calc(100% - 16px - 44px - 8px - 16px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  transform-origin: top right;
+  animation-name: dropIn;
+}
+
 /* Modal Animation */
 @keyframes slideIn {
   from {transform: translateY(100%); opacity: 0}
@@ -561,6 +591,9 @@ dialog::backdrop {
   from {opacity: 0}
   to {opacity: 1}
 }
+@keyframes dropIn {
+  from {transform: scale(0.8); opacity: 0}
+}
 @media (prefers-reduced-motion: reduce) {
-  dialog, dialog::backdrop { animation: none; }
+  dialog, #menu, dialog::backdrop { animation: none; }
 }

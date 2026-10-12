@@ -26,7 +26,6 @@ const API  = 'https://www.beeminder.com/api/v1/'
 const AUTH = 'https://www.beeminder.com/apps/authorize'
 const TOKEN = 'tok123' // the one access token the fake Beeminder accepts
 const PHONE = { width: 390, height: 844 }
-const NOTALICE = /^(?!alice$)/ // matches any text but "alice"
 
 // How long, in milliseconds, a qual waits for what it's waiting for, like
 // text to show or a button to tap, before it fails: long enough for a
@@ -74,6 +73,39 @@ let browser
 before(async () => { browser = await chromium.launch({ channel: 'chrome' }) })
 after(() => browser.close())
 
+// Every page the quals open draws its text in Roboto, Android's own system
+// font, rather than in that of the computer running them, which can be far
+// wider (on Linux, DejaVu Sans is, by about 10%), so that the quals that
+// measure the layout come out the same on any computer. TallyBee itself asks
+// for each device's own font (system-ui: see style.css). An iPhone's is San
+// Francisco, which can't be used here (Apple licenses it for mock-ups only).
+// Measured on an iPhone with iOS 26 (2026-10-12), Roboto is within 2% of its
+// widths for most of TallyBee's words, and within 7% for all, but its digits
+// are up to 10% narrower, so a long number has a little more room in the
+// quals than on an iPhone. The font comes from the @fontsource-variable/roboto
+// package, in the subsets that hold the characters TallyBee shows (like the
+// ∑, and the ✓), each for its own characters, and a style sheet of the quals'
+// own puts it in place of the page's font, as there's no telling the browser
+// what system-ui is.
+const ROBOTO = (() => {
+  const file = f => readFileSync(fileURLToPath(import.meta.resolve(
+    `@fontsource-variable/roboto/${f}`)))
+  const ranges = JSON.parse(file('unicode.json'))
+  return ['latin', 'math', 'symbols'].map(subset => ({ range: ranges[subset],
+    data: file(`files/roboto-${subset}-wght-normal.woff2`).toString('base64') }))
+})()
+
+// Make every page in the browser context draw its text in Roboto (see ROBOTO)
+const roboto = context => context.addInitScript(faces => {
+  for (const { range, data } of faces)
+    document.fonts.add(new FontFace('Quals Roboto',
+      Uint8Array.from(atob(data), c => c.charCodeAt(0)),
+      { weight: '100 900', unicodeRange: range }))
+  const sheet = new CSSStyleSheet()
+  sheet.replaceSync('body { font-family: "Quals Roboto" }')
+  document.adoptedStyleSheets = [sheet]
+}, ROBOTO)
+
 // The fake Beeminder's state as each qual starts (see qual)
 const newbee = () => ({ goals: structuredClone(GOALS), user: structuredClone(ALICE),
                         added: {}, tokens: [TOKEN],
@@ -94,6 +126,7 @@ function qual(name, f, opts = {}) {
     const context = await browser.newContext({ viewport: PHONE, hasTouch: true,
                                                isMobile: true,
                                                serviceWorkers: 'block', ...opts })
+    await roboto(context)
     const bee = newbee()
     // Every page, including second windows, reports its uncaught errors
     context.on('page', p => {
@@ -196,13 +229,13 @@ async function help(page) {
 }
 
 // Press the login button, the way a person does, on TallyBee (loading it first
-// if need be): open the menu, which holds it, and tap it; and wait at the fake
-// Beeminder's authorize page. Returns the state that TallyBee sent there, for
-// Beeminder to send back.
-// SPEC CHANGE (menu, 2026-10-08): the login button is in the menu
+// if need be): tap it, in the footer; and wait at the fake Beeminder's
+// authorize page. Returns the state that TallyBee sent there, for Beeminder to
+// send back.
+// SPEC CHANGE (login, 2026-10-12): the login button is in the footer again,
+// heading the info line, not in the menu (README wishlist 2)
 async function authorize(page) {
   if (!page.url().startsWith(APP)) await page.goto(APP)
-  await menu(page)
   await tap(page, '#loginbut')
   await page.waitForURL(AUTH + '**')
   return new URL(page.url()).searchParams.get('state')
@@ -308,14 +341,11 @@ async function tap(page, sel, n = 1) {
   for (let i = 0; i < n; i++) await (touch ? page.tap(sel) : page.click(sel))
 }
 
-// Press Clear the way a person does: open the menu, which holds it, and tap it,
-// which closes the menu
+// Press Clear the way a person does: tap it, in the bar
 // SPEC CHANGE (menu, 2026-10-08): the menu is its own sheet, not the help
-async function clear(page) {
-  await menu(page)
-  await tap(page, '#clearbut')
-  assert.ok(await till(page, async () => !await menuOpen(page)), 'Clear closes the menu')
-}
+// SPEC CHANGE (clear, 2026-10-12): Clear is in the bar, between −1 and UNDO,
+// not in the menu (README wishlist 5)
+const clear = page => tap(page, '#clearbut')
 
 // Tap the big button n times, all at once, which is faster than tap for big n
 const taps = (page, n) => page.evaluate(n => {
@@ -396,8 +426,14 @@ const box = (page, sel) => page.locator(sel).boundingBox()
 // SPEC CHANGE (menu, 2026-10-08): the drawer is the last datapoint and the
 // form row, day, number and comment; the login button, the dropdown and the
 // goal's link are in the menu
+// SPEC CHANGE (login, 2026-10-12): the login button too, heading the info line
+// SPEC CHANGE (username, 2026-10-12): logged in, as these quals mostly are,
+// there's no login button to fold away (see "logged in, the username heads
+// the top line, and there's no login button"); logged out, folding hides it
+// with the rest (see "logged out, the footer stays as it was...")
 const FOLDAWAY = ['#lastdp', '#day', '#num', '#comment']
-const BAR = ['#minusbut', '#undobut', '#subbut', '#foldbut']
+// SPEC CHANGE (clear, 2026-10-12): Clear too, between −1 and UNDO
+const BAR = ['#minusbut', '#clearbut', '#undobut', '#subbut', '#foldbut']
 
 // Whether the fold button says the footer is unfolded, as screen readers hear
 const unfolded = async page =>
@@ -417,7 +453,11 @@ async function remark(page, text) {
 // ones matching sels, like those that show with the footer folded.
 // SPEC CHANGE (menu, 2026-10-08): the login button, the dropdown and the
 // goal's link are in the menu; the menu button is over the big button
-const FOOTER = ['#minusbut', '#undobut', '#num', '#subbut', '#safesum', '#lastdp',
+// SPEC CHANGE (login, 2026-10-12): the login button is in the footer again
+// SPEC CHANGE (clear, 2026-10-12): Clear is in the footer again, in the bar
+// SPEC CHANGE (username, 2026-10-12): logged in, no login button (see
+// FOLDAWAY)
+const FOOTER = ['#minusbut', '#clearbut', '#undobut', '#num', '#subbut', '#safesum', '#lastdp',
                 '#day', '#comment', '#foldbut', '.versiontag', '#goalname', '#menubut']
 async function fits(page, sels = FOOTER) {
   const { width, height } = page.viewportSize()
@@ -476,19 +516,22 @@ function contrast(a, b) {
 
 // Replicata: open TallyBee for the first time, logged out, and tap twice; open
 // the menu.
-// Expectata: the count, 2; a login button, in the menu; Submit and the empty
-// dropdown grayed out, as there's no goal to send to; and no trip to
-// Beeminder, to log in or for goals.
+// Expectata: the count, 2; a login button, in the footer, with the menu
+// closed; Submit and the empty dropdown grayed out, as there's no goal to
+// send to; and no trip to Beeminder, to log in or for goals.
 // Resultata (in a mutant that left Submit usable with no goal): Submit usable,
 // with nowhere to send the count.
 // SPEC CHANGE (menu, 2026-10-08): the login button is in the menu
+// SPEC CHANGE (login, 2026-10-12): the login button is in the footer again
+// (README wishlist 2: "Make it more obvious when you're not logged in")
 qual('first visit shows the counter, working, and a login button', async (page, bee) => {
   await page.goto(APP)
   await tap(page, '#bigbut', 2)
   assert.equal(await count(page), 2)
-  assert.ok(!await page.isVisible('#loginbut'), 'the login button, with the menu closed')
+  assert.ok(await page.isVisible('#loginbut'), 'the login button, with the menu closed')
+  assert.ok(await page.$eval('#loginbut', b => b.closest('.footer') !== null),
+            'the login button, in the footer')
   await menu(page)
-  assert.ok(await page.isVisible('#loginbut'), 'the login button, in the menu')
   assert.ok(await disabled(page, '#subbut'), 'Submit with no goal to submit to')
   assert.ok(await page.$eval('#goals', e => getComputedStyle(e).opacity < 1),
             'the empty dropdown should look grayed out')
@@ -526,11 +569,12 @@ qual('the redirect back from Beeminder logs you in, for good', async (page, bee)
   assert.deepEqual(JSON.parse(await stored(page)), { token: TOKEN, user: 'alice' })
   assert.deepEqual(await page.$$eval('#goals option', os => os.map(o => o.value)),
                    ['pushups', 'pages', 'newodo'])
-  await see(page, '#loginbut', 'alice')
+  // SPEC CHANGE (username, 2026-10-12): the username is on the top line
+  await see(page, '#goalname', 'alice/pushups')
   // Reloading doesn't need Beeminder again
   await page.reload()
   await see(page, '#goals', /pushups/)
-  await see(page, '#loginbut', 'alice')
+  await see(page, '#goalname', 'alice/pushups')
   assert.equal(bee.authorizes.length, 1)
 })
 
@@ -579,7 +623,8 @@ qual('denying access after another window logged in still loads your goals', asy
   await see(page, '#status', /The user denied you access/)
   await expectError(page, bee, /The user denied you access/)
   await see(page, '#goals', /pushups/)
-  await see(page, '#loginbut', 'alice')
+  // SPEC CHANGE (username, 2026-10-12): the username is on the top line
+  await see(page, '#goalname', 'alice/pushups')
   assert.equal(await count(page), 2)
   assert.ok(!await disabled(page, '#subbut'))
 })
@@ -666,7 +711,9 @@ qual('a token Beeminder rejects when loading goals gets forgotten', async (page,
   await page.reload()
   await see(page, '#status', `Error: ${REAUTH}`)
   await expectError(page, bee, new RegExp(RegExp.escape(REAUTH)))
-  await see(page, '#loginbut', NOTALICE)
+  // SPEC CHANGE (username, 2026-10-12): the login button shows again, rather
+  // than turning back from the username
+  await page.locator('#loginbut').waitFor()
   assert.equal(await stored(page), null)
 })
 
@@ -684,7 +731,9 @@ qual('a token Beeminder rejects when submitting gets forgotten, keeping the coun
   await tap(page, '#subbut')
   await see(page, '#status', `Error: ${REAUTH}`)
   await expectError(page, bee, new RegExp(RegExp.escape(REAUTH)))
-  await see(page, '#loginbut', NOTALICE)
+  // SPEC CHANGE (username, 2026-10-12): the login button shows again, rather
+  // than turning back from the username
+  await page.locator('#loginbut').waitFor()
   assert.equal(await stored(page), null)
   assert.equal(await count(page), 3)
   // Logging in again gets the count submitted after all
@@ -724,31 +773,37 @@ qual("a 401 for an old token doesn't log out a newer login", async (page, bee) =
   assert.deepEqual(JSON.parse(await stored(page)), { token: 'tok456', user: 'alice' })
 })
 
-// Replicata: log in, then open the menu and click your username.
-// Expectata: nothing, since the username only says who's logged in, and it
-// doesn't look like something to press. (Logged out, the login button does.)
+// Replicata: log in, then tap your username, at the top of the screen; then
+// open a link to a goal you don't have.
+// Expectata: logged in, no login button, as pressing it would log in again;
+// the username on the top line, before the goal's name, as Beeminder writes a
+// goal, alice/pushups, where a tap counts, as anywhere on the black, and
+// leaves you logged in; and with no goal, the username alone.
 // Resultata (before): a trip through Beeminder's login, which got a new token
 // and so logged TallyBee out on your other devices (Beeminder keeps one token
 // per app).
 // SPEC CHANGE (menu, 2026-10-08): the username is in the menu
-qual('the username only says who is logged in: pressing it does nothing', async (page, bee) => {
+// SPEC CHANGE (login, 2026-10-12): the username is in the footer again
+// SPEC CHANGE (username, 2026-10-12): renamed from "the username only says
+// who is logged in: pressing it does nothing". The username is on the top
+// line, beside the goal's name, rather than in the info line, beside the last
+// datapoint; and logged in, the login button is hidden (decided with the
+// person working on this, 2026-10-12)
+qual("logged in, the username heads the top line, and there's no login button", async (page, bee) => {
   await page.goto(APP)
-  const cursor = sel => page.$eval(sel, e => getComputedStyle(e).cursor)
-  assert.equal(await cursor('#loginbut'), 'pointer', 'the login button, logged out')
+  assert.ok(await page.isVisible('#loginbut'), 'logged out')
   await login(page)
-  await see(page, '#loginbut', 'alice')
-  assert.equal(await cursor('#loginbut'), 'default')
-  assert.equal(await page.$eval('#loginbut', e => getComputedStyle(e).backgroundColor),
-               'rgba(0, 0, 0, 0)')
-  await menu(page)
-  await page.locator('#loginbut').click({ force: true })
-  assert.ok(await menuOpen(page), 'the menu, with nothing picked in it')
-  await page.keyboard.press('Escape')
-  await tap(page, '#bigbut') // still here, on TallyBee
+  await see(page, '#goalname', 'alice/pushups')
+  assert.ok(!await page.isVisible('#loginbut'), 'logged in')
+  const n = await box(page, '#goalname')
+  await page.touchscreen.tap(n.x + 4, n.y + n.height / 2)
   await see(page, '#bigbut', '1')
   assert.equal(page.url(), APP + '?goal=pushups')
   assert.equal(bee.authorizes.length, 1)
-}, DESK)
+  await page.goto(APP + '?goal=nosuchgoal')
+  await expectError(page, bee, /nosuchgoal/)
+  await see(page, '#goalname', 'alice')
+})
 
 // Replicata: open TallyBee, logged out, in two windows side by side, and log
 // in in one of them.
@@ -762,7 +817,8 @@ qual('a window that stays in view gets the goals when another window logs in', a
   await login(w)
   await page.bringToFront()
   await see(page, '#goals', /pushups/)
-  await see(page, '#loginbut', 'alice')
+  // SPEC CHANGE (username, 2026-10-12): the username is on the top line
+  await see(page, '#goalname', 'alice/pushups')
 })
 
 // Replicata: open TallyBee, logged out, and switch to another tab and back.
@@ -1100,19 +1156,29 @@ qual('Clear is grayed out when the tally is already 0', async page => {
   assert.ok(await disabled(page, '#clearbut'), 'on pages, at 120')
 })
 
-// Replicata: reach for −1, UNDO, Submit or the fold button, and miss a little.
-// Expectata: never Clear, which wipes out the count: it isn't in the footer at
-// all, but in the menu, apart from all the footer's controls, and looks unlike
-// UNDO.
-// Resultata (before): Clear was 8px from UNDO, and looked just like it.
+// Replicata: tap 3, and look at the bar, on phones upright and sideways, big
+// and small.
+// Expectata: Clear in the bar, next to −1 and UNDO, between them, 8px from
+// each and level with them, so that −1 and UNDO aren't side by side (README
+// wishlist 5: "Clear clearly belongs next to -1 and/or Undo. And maybe Undo
+// and -1 shouldn't be right next to each other."); and looking unlike UNDO. A
+// Clear pressed by a near miss, wiping out the count, is undone by UNDO (see
+// "UNDO undoes a Clear, datapoint and all").
+// Resultata (v2026.10.08c): Clear in the menu, with −1 and UNDO side by side.
+// SPEC CHANGE (clear, 2026-10-12): this was "Clear is in the menu, not the
+// footer, and looks unlike UNDO", from when UNDO undid only the last thing
+// done, so that Clear was kept away from the controls a finger reaches for
+// while counting
 for (const [width, height] of [[320, 568], [390, 844], [600, 800], [844, 390]])
   // FINAL DESIGN: renamed from "Clear is far from −1, UNDO, Submit and ?"
-  qual(`Clear is in the menu, not the footer, and looks unlike UNDO (${width}x${height})`, async page => {
+  qual(`Clear sits between −1 and UNDO, and looks unlike UNDO (${width}x${height})`, async page => {
     await login(page)
     await tap(page, '#bigbut', 3)
-    assert.ok(!await page.isVisible('#clearbut'), 'Clear in the footer')
-    await menu(page) // SPEC CHANGE (menu, 2026-10-08): the menu, not the help
-    assert.ok(await page.isVisible('#clearbut'), 'Clear in the menu')
+    assert.ok(await page.$eval('#clearbut', b => b.closest('#bar') !== null), 'in the bar')
+    const [m, c, u] = await Promise.all(['#minusbut', '#clearbut', '#undobut']
+      .map(s => box(page, s)))
+    assert.ok(m.y === c.y && c.y === u.y && Math.abs(m.x + m.width + 8 - c.x) < 1 &&
+              Math.abs(c.x + c.width + 8 - u.x) < 1, JSON.stringify({ m, c, u }))
     const look = sel => page.$eval(sel, e => {
       const s = getComputedStyle(e)
       return [s.color, s.backgroundColor, s.borderTopColor].join()
@@ -1238,6 +1304,7 @@ test('in an installed app too, pulling down to reload is left to the browser', a
   const context = await chromium.launchPersistentContext(dir, { channel: 'chrome',
     args: [`--app=${APP}`, '--host-resolver-rules=MAP * ~NOTFOUND'],
     viewport: PHONE, serviceWorkers: 'block' })
+  await roboto(context)
   try {
     await context.route('**', r => r.abort())
     await context.route(APP + '**', r => serve(r))
@@ -3314,21 +3381,37 @@ qual('an account with no goals gets its first goal selected once it has one', as
   assert.equal(await page.inputValue('#goals'), 'pushups')
 })
 
-// Replicata: log in; pick pages; and, logged out, look at the goal's link (the
-// ↗ beside the dropdown, in the menu).
-// Expectata: a link to the goal's page on Beeminder, opening apart from
-// TallyBee: beeminder.com/alice/pushups, then /alice/pages; logged out, no
-// link, grayed out.
-// Resultata (before): no link to the goal.
+// Replicata: logged out, look at the goal's link, in the menu; log in, and
+// open the menu; pick pages.
+// Expectata: under the dropdown, a normal hyperlink, underlined words rather
+// than a button, saying where it goes (README wishlist 4: "a normal hyperlink
+// with anchor text beeminder.com/USER/GOAL"): beeminder.com/alice/pushups,
+// a link to that goal's page on Beeminder, opening apart from TallyBee; then
+// beeminder.com/alice/pages; and logged out, with no goal, just
+// beeminder.com, grayed out, and no link.
+// Resultata (v2026.10.08c): an ↗, in a round button beside the dropdown.
 // SPEC CHANGE (menu, 2026-10-08): the dropdown and its link are in the menu
-qual("the ↗ beside the dropdown links to the goal's page on Beeminder", async page => {
+// SPEC CHANGE (link, 2026-10-12): this was "the ↗ beside the dropdown links to
+// the goal's page on Beeminder"
+qual("the goal's link, under the dropdown, says where it goes: beeminder.com/USER/GOAL", async page => {
   await page.goto(APP)
-  assert.equal(await page.getAttribute('#goallink', 'href'), null)
+  const link = () => page.$eval('#goallink', a => [a.textContent, a.getAttribute('href'),
+                                                   a.target])
+  assert.deepEqual(await link(), ['beeminder.com', null, '_blank'], 'logged out')
+  assert.ok(await opacity(page, '#goallink') < 0.5, 'logged out: grayed out')
   await login(page)
-  const link = () => page.$eval('#goallink', a => [a.href, a.target])
-  assert.deepEqual(await link(), ['https://www.beeminder.com/alice/pushups', '_blank'])
+  assert.deepEqual(await link(), ['beeminder.com/alice/pushups',
+    'https://www.beeminder.com/alice/pushups', '_blank'])
+  await menu(page)
+  const [g, l] = [await box(page, '#goals'), await box(page, '#goallink')]
+  assert.ok(l.y >= g.y + g.height, `under the dropdown: ${JSON.stringify([g, l])}`)
+  assert.deepEqual(await page.$eval('#goallink', a => { const s = getComputedStyle(a)
+    return [s.textDecorationLine, s.backgroundColor] }), ['underline', 'rgba(0, 0, 0, 0)'],
+    'underlined words, not a button')
+  await page.keyboard.press('Escape')
   await choose(page, 'pages')
-  assert.deepEqual(await link(), ['https://www.beeminder.com/alice/pages', '_blank'])
+  assert.deepEqual(await link(), ['beeminder.com/alice/pages',
+    'https://www.beeminder.com/alice/pages', '_blank'])
 })
 
 // Replicata: on pushups, tap 3; pick pages, an odometer goal at 120, with
@@ -3554,6 +3637,7 @@ qual("the page starts with no app manifest, so that Safari reads its goal's", as
 test('Chrome has no complaint about TallyBee as an app', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'tallybee-quals-'))
   const context = await chromium.launchPersistentContext(dir, { channel: 'chrome' })
+  await roboto(context)
   try {
     await localhost(async url => {
       const page = await context.newPage()
@@ -3582,6 +3666,7 @@ const ready = page => page.waitForFunction(
 test('after one visit, TallyBee opens and counts with no connection', async () => {
   const context = await browser.newContext({ viewport: PHONE, hasTouch: true,
                                              isMobile: true })
+  await roboto(context)
   try {
     await localhost(async url => {
       const page = await context.newPage()
@@ -3608,6 +3693,7 @@ test('after one visit, TallyBee opens and counts with no connection', async () =
 test('a new version, published from GitHub Pages, opens whole, right away', async () => {
   let version = 1
   const context = await browser.newContext()
+  await roboto(context)
   try {
     await localhost(async url => {
       const page = await context.newPage()
@@ -3638,6 +3724,7 @@ test('a new version, published from GitHub Pages, opens whole, right away', asyn
 test('online, TallyBee always opens its newest version', async () => {
   let version = 1
   const context = await browser.newContext()
+  await roboto(context)
   try {
     await localhost(async url => {
       const page = await context.newPage()
@@ -3675,6 +3762,7 @@ async function kept(page, text) {
 test('offline, TallyBee opens the version it last opened online', async () => {
   let version = 1
   const context = await browser.newContext()
+  await roboto(context)
   try {
     await localhost(async url => {
       const page = await context.newPage()
@@ -3704,6 +3792,7 @@ test('offline, TallyBee opens the version it last opened online', async () => {
 test('the service worker keeps no URL with an access token in it', async () => {
   let version = 1
   const context = await browser.newContext()
+  await roboto(context)
   try {
     await localhost(async url => {
       const page = await context.newPage()
@@ -3736,6 +3825,7 @@ test('the service worker keeps no URL with an access token in it', async () => {
 test("the service worker leaves Beeminder's answers alone", async () => {
   const bee = newbee()
   const context = await browser.newContext()
+  await roboto(context)
   await context.route(API + '**', r => fakeBeeminder(bee, r))
   try {
     await localhost(async url => {
@@ -3769,6 +3859,7 @@ test('a 404 while TallyBee is being published leaves its offline copy alone', as
   let version = 1
   const context = await browser.newContext({ viewport: PHONE, hasTouch: true,
                                              isMobile: true })
+  await roboto(context)
   try {
     await localhost(async url => {
       const page = await context.newPage()
@@ -3901,9 +3992,9 @@ qual('every icon the page links to exists', async page => {
 // button (at the right end of the bottom row); press UNDO; tap the fold button
 // again.
 // Expectata: at first, every control, the fold button saying the footer is
-// unfolded; after the first tap, just the bar: −1, UNDO, Submit and the fold
-// button, which says the footer is folded; UNDO takes back the last tap, not
-// the fold; after the second tap, every control again.
+// unfolded; after the first tap, just the bar: −1, Clear, UNDO, Submit and
+// the fold button, which says the footer is folded; UNDO takes back the last
+// tap, not the fold; after the second tap, every control again.
 // Resultata (before): no way to fold the footer, which always took three rows.
 qual('folding the footer leaves the bar; unfolding brings back the rest', async page => {
   await login(page)
@@ -3926,20 +4017,26 @@ qual('folding the footer leaves the bar; unfolding brings back the rest', async 
 
 // Replicata: open TallyBee, logged in, on a phone upright, a narrow one, and
 // one turned sideways.
-// Expectata: unfolded, from the top down: the info line, the last datapoint;
-// the form row, the day, the number to send and the comment field, in
-// Beeminder's own order; and the bar's −1, UNDO, Submit and fold button, each
-// row on a line of its own, but sideways, where there's room, the info line
-// and the form row share a line.
+// Expectata: unfolded, from the top down: the info line, the last
+// datapoint; the form row, the day, the number to send and the
+// comment field, in Beeminder's own order; and the bar's −1, Clear, UNDO,
+// Submit and fold button, each row on a line of its own, but sideways, where
+// there's room, the info line and the form row share a line.
 // Resultata (in a mutant that put the bar above the drawer): the bar above
 // the info line and the form row.
-for (const [width, height, lines] of [[390, 844, [0, 1, 2]], [320, 568, [0, 1, 2]],
+// SPEC CHANGE (clear, 2026-10-12): 360x780, not 320x568: with Clear in the
+// bar, a 320px phone's bar takes two rows (approved 2026-10-12 by the person
+// working on this for the owner; no iPhone that narrow runs iOS 16 or later)
+for (const [width, height, lines] of [[390, 844, [0, 1, 2]], [360, 780, [0, 1, 2]],
                                       [844, 390, [0, 0, 1]]])
   // FINAL DESIGN: renamed from "unfolded, the footer goes from Clear's row
   // down to the bar"
   // SPEC CHANGE (menu, 2026-10-08): three rows, not four: the login button,
   // the dropdown and the goal's link are in the menu, and the number to send
   // is in the form row, after the day
+  // SPEC CHANGE (login, 2026-10-12): the username heads the info line again
+  // SPEC CHANGE (username, 2026-10-12): the username is on the top line, so
+  // the info line is the last datapoint alone
   qual(`unfolded, the footer goes from the info line down to the bar (${width}x${height})`, async page => {
     await login(page)
     const rows = [['#lastdp'], ['#day', '#num', '#comment'], BAR]
@@ -3956,11 +4053,9 @@ for (const [width, height, lines] of [[390, 844, [0, 1, 2]], [320, 568, [0, 1, 2
   }, { viewport: { width, height } })
 
 // Replicata: open TallyBee, logged out, on a 320px phone, and on a phone
-// turned sideways, and open the menu; log in as alice, and as someone with a
-// long name, on a 390px one, and open the menu.
-// Expectata: the login button heading the menu, at its left edge; on the
-// narrow phone, its label on two lines rather than cut off; the username as
-// wide as the name, no wider; and a long name whole, on one line.
+// turned sideways.
+// Expectata: the login button heading the footer, at its left edge; on the
+// narrow phone, its label on two lines rather than cut off.
 // Resultata (in one of this round's builds, which kept the margin that once
 // set Clear apart from UNDO in its row): logged out on the phone turned
 // sideways, the login button sat 46px from Clear, up against the comment
@@ -3970,40 +4065,21 @@ for (const [width, height, lines] of [[390, 844, [0, 1, 2]], [320, 568, [0, 1, 2
 // SPEC CHANGE (menu, 2026-10-08): renamed from "the login button heads the
 // footer...": it heads the menu, a line of its own, 44px tall like the menu's
 // other rows (not a 20px line of words, as in the footer)
-qual('the login button heads the menu, as wide as its label, which wraps only if it must', async page => {
+// SPEC CHANGE (login, 2026-10-12): renamed back from "the login button heads
+// the menu...": it heads the footer again, as before the menu (README
+// wishlist 2)
+// SPEC CHANGE (username, 2026-10-12): logged in, the login button is hidden,
+// rather than being the username, plain text, which is on the top line (see
+// "logged in, the username heads the top line, and there's no login button")
+qual('the login button heads the footer, as wide as its label, which wraps only if it must', async page => {
   await page.setViewportSize({ width: 320, height: 568 })
   await page.goto(APP)
-  await menu(page)
   let l = await box(page, '#loginbut')
   assert.ok(l.x === 16 && l.x + l.width <= 304 && l.height < 2 * 44, JSON.stringify(l))
-  await page.keyboard.press('Escape')
   await page.setViewportSize({ width: 844, height: 390 })
-  await menu(page)
   l = await box(page, '#loginbut')
-  // (the menu is 640px wide there, centered: see dialog in style.css)
-  assert.ok(l.x === (844 - 640) / 2 + 16 && l.height === 44, JSON.stringify(l))
-  await page.keyboard.press('Escape')
-  await page.setViewportSize(PHONE)
-  for (const name of ['alice', 'christophermoravec']) {
-    // Logged in, the username can't be pressed to log in as someone else, so
-    // log out first, by forgetting the access token
-    await page.evaluate(() => localStorage.removeItem('beeminder-token'))
-    await page.reload()
-    await login(page, name)
-    await menu(page)
-    l = await box(page, '#loginbut')
-    // The width of its label, and of its padding and border
-    const fit = await page.$eval('#loginbut', b => {
-      const r = document.createRange(), s = getComputedStyle(b)
-      r.selectNodeContents(b)
-      return r.getBoundingClientRect().width + parseFloat(s.paddingLeft) +
-        parseFloat(s.paddingRight) + parseFloat(s.borderLeftWidth) +
-        parseFloat(s.borderRightWidth)
-    })
-    assert.ok(l.x === 16 && l.height === 44 && Math.abs(l.width - fit) < 1,
-              JSON.stringify({ name, l, fit }))
-    await page.keyboard.press('Escape')
-  }
+  // (the footer's margin there is 22px: see .footer in style.css)
+  assert.ok(l.x === 844 / 2 - 400 && l.height === 44, JSON.stringify(l))
 })
 
 // Replicata: look at the footer, unfolded, on a phone.
@@ -4062,29 +4138,33 @@ qual('no "Send" or "to" in the footer, folded or not', async page => {
   assert.equal(await page.locator('#gist').count(), 0)
 })
 
-// Replicata: on a 320px-wide phone, logged in with a long username, tap 12,
+// Replicata: on a 360px-wide phone, logged in with a long username, tap 12,
 // and fold the footer.
 // Expectata: one row of controls, each at least 44 by 44 px, whole, on the
 // screen, and none on top of another; and a footer no taller than that row
 // and its margins: 16px above and below, and the 1px line on top.
 // Resultata (in a mutant whose summary wouldn't shrink): the bar's controls on
 // a line below it, in a footer 109px tall.
-qual('folded, the footer is one row, even on a 320px phone', async page => {
+// SPEC CHANGE (clear, 2026-10-12): this was "...even on a 320px phone": with
+// Clear in the bar, a 320px phone's bar takes two rows (approved 2026-10-12;
+// see "unfolded, the footer goes from the info line down to the bar")
+qual('folded, the footer is one row, even on a 360px phone', async page => {
   await login(page, 'christophermoravec')
   await tap(page, '#bigbut', 12)
   await tap(page, '#foldbut')
   const bs = await Promise.all(BAR.map(s => box(page, s)))
   bs.forEach((b, i) => assert.ok(b.width >= 44 && b.height >= 44 && b.x >= 0 &&
-    b.x + b.width <= 320 && b.y === bs[0].y, `${BAR[i]}: ${JSON.stringify(b)}`))
+    b.x + b.width <= 360 && b.y === bs[0].y, `${BAR[i]}: ${JSON.stringify(b)}`))
   bs.forEach((a, i) => bs.slice(i + 1).forEach((b, j) => assert.ok(
     a.x + a.width <= b.x || b.x + b.width <= a.x, `${BAR[i]} overlaps ${BAR[i + 1 + j]}`)))
   const f = await box(page, '.footer')
   assert.ok(f.height <= 77, JSON.stringify(f))
-}, { viewport: { width: 320, height: 568 } })
+}, { viewport: { width: 360, height: 780 } })
 
-// Replicata: fold the footer on a phone just wide enough for −1, UNDO, Submit
-// and the fold button in a row, 8px apart, between the footer's 16px margins
-// (297px wide, in the font these quals get).
+// Replicata: fold the footer on a phone just wide enough for −1, Clear, UNDO,
+// Submit and the fold button in a row, 8px apart, between the footer's 16px
+// margins (363px wide, in the font these quals get: see ROBOTO).
+// SPEC CHANGE (clear, 2026-10-12): Clear too (see BAR)
 // Expectata: one row, the summary taking none of its room, and a footer no
 // taller than that row and its margins (77px).
 // Resultata (in this round's builds): from 297 to 304px wide, the fold button
@@ -4100,13 +4180,39 @@ qual('folded, the bar is one row wherever its controls fit in one', async page =
   assert.ok(ys.every(y => y === ys[0]) && f.height <= 77, JSON.stringify({ width, ys, f }))
 })
 
+// Replicata: log in, on pushups (whose Submit says "Submit (∑)"), and tap 3,
+// on phones 360px wide and up.
+// Expectata: the bar's five controls, −1, Clear, UNDO, Submit and the fold
+// button, in one row; and from 375px wide up, like an iPhone's, Submit's
+// "Submit (∑)" on one line, as their buttons have 8px at their sides, not the
+// 12px of the other controls.
+// Resultata (in this round's draft, with Clear in the bar and 12px at its
+// buttons' sides): at 360px, the fold button on a row of its own, taking 56px
+// from tapping; at 375px, "(∑)" under "Submit".
+for (const [width, height] of [[360, 780], [375, 667], [390, 844], [412, 915]])
+  qual(`the bar is one row on phones 360px wide and up (${width}x${height})`, async page => {
+    await login(page)
+    await tap(page, '#bigbut', 3)
+    const bs = await Promise.all(BAR.map(s => box(page, s)))
+    assert.ok(bs.every(b => b.y === bs[0].y), JSON.stringify(bs))
+    // How many lines Submit's label takes
+    const lines = await page.$eval('#subbut', b => {
+      const r = document.createRange()
+      r.selectNodeContents(b)
+      return new Set([...r.getClientRects()].map(q => Math.round(q.top))).size
+    })
+    assert.ok(width < 375 || lines === 1, `Submit's label on ${lines} lines`)
+  }, { viewport: { width, height } })
+
 // Replicata: fold the footer, on a phone upright and sideways, big and small.
 // Expectata: the big button gets the whole screen but the one row and its
 // margins (77px).
 // Resultata (before): the footer took three rows (two, sideways), which left
 // 655 of 844px for tapping on a 390x844 phone, and 187 of 320 on a 568x320
 // one.
-for (const [width, height] of [[390, 844], [320, 568], [844, 390], [568, 320]])
+// SPEC CHANGE (clear, 2026-10-12): 360x780, not 320x568 (see "folded, the
+// footer is one row, even on a 360px phone")
+for (const [width, height] of [[390, 844], [360, 780], [844, 390], [568, 320]])
   qual(`folded, the big button gets all but one row (${width}x${height})`, async page => {
     await login(page)
     await tap(page, '#foldbut')
@@ -4132,8 +4238,8 @@ qual('folded on a 280px phone, the big button gets all but the bar', async page 
 // Replicata: with a finger over Submit, fold the footer, and unfold it, on
 // phones upright and sideways, big and small, on a computer, and on a phone
 // with its text at 200% (with long names).
-// Expectata: −1, UNDO, Submit and the fold button stay right where they were:
-// it's the top of the footer that moves.
+// Expectata: −1, Clear, UNDO, Submit and the fold button stay right where
+// they were: it's the top of the footer that moves.
 // Resultata (in a mutant that didn't keep the bar's controls to the right): at
 // 320x568 and 390x844, −1, UNDO, Submit and the fold button at the left while
 // unfolded, and at the right while folded.
@@ -4155,8 +4261,8 @@ for (const [width, height, opts, long] of [[320, 568], [390, 844], [844, 390], [
 
 // Replicata: fold the footer, and unfold it, on a phone of each width from
 // 200px to 700px, a pixel at a time.
-// Expectata: at every width, −1, UNDO, Submit and the fold button stay right
-// where they were.
+// Expectata: at every width, −1, Clear, UNDO, Submit and the fold button
+// stay right where they were.
 // Resultata (in one of this round's builds, which put the summary in the same
 // line-wrapping row as the bar's controls): from 245 to 252px wide, and from
 // 297 to 304px, folding moved −1, UNDO and Submit, to make room for the
@@ -4221,8 +4327,8 @@ qual('the fold is remembered, and shared by all TallyBee windows', async page =>
 // fold the footer and do it again.
 // Expectata: unfolded, the focus goes to the menu button, over the big
 // button, and then through every control in the footer, row by row; folded,
-// only through the menu button, −1, UNDO, Submit and the fold button, never to
-// a control that's folded away.
+// only through the menu button, −1, Clear, UNDO, Submit and the fold button,
+// never to a control that's folded away.
 // Resultata (in a mutant that folded the drawer away by making it
 // see-through): Tab went to Clear and on, through the controls folded away.
 // SPEC CHANGE (menu, 2026-10-08): the menu button first, and then the form
@@ -4239,10 +4345,12 @@ qual('the Tab order goes row by row, and skips what is folded away', async page 
     }
     return ids
   }
-  assert.deepEqual(await order(8), ['menubut', 'day', 'num', 'comment',
-    'minusbut', 'undobut', 'subbut', 'foldbut'])
+  // SPEC CHANGE (clear, 2026-10-12): Clear, in the bar, between −1 and UNDO
+  assert.deepEqual(await order(9), ['menubut', 'day', 'num', 'comment',
+    'minusbut', 'clearbut', 'undobut', 'subbut', 'foldbut'])
   await page.click('#foldbut')
-  assert.deepEqual(await order(5), ['menubut', 'minusbut', 'undobut', 'subbut', 'foldbut'])
+  assert.deepEqual(await order(6), ['menubut', 'minusbut', 'clearbut', 'undobut',
+    'subbut', 'foldbut'])
 }, DESK)
 
 // Replicata: use TallyBee with a screen reader, and fold the footer.
@@ -4354,10 +4462,11 @@ qual('Submit is grayed out while logged out, even with the goals still showing',
 })
 
 // Replicata: log in, fold the footer, tap 2, and Submit, which gets a 401, as
-// you logged in on another device; open the menu; then log in again here.
-// Expectata: logged out, the footer folded still, as the login button is in
-// the menu, where the error says to log in again ("here"); the fold button
-// usable; and, logged in again, the footer folded, as before.
+// you logged in on another device; unfold the footer; then log in again here.
+// Expectata: logged out, the footer folded still, with the login button folded
+// away with the rest of the drawer, and the fold button usable; unfolded, the
+// login button, heading the info line; and, logged in again, the footer
+// unfolded, as left.
 // Resultata (v2026.10.08b): the footer unfolded itself, for the login button,
 // which was in the drawer, and the fold button was grayed out.
 // SPEC CHANGE (menu, 2026-10-08): this was "logged out, the footer shows
@@ -4365,7 +4474,12 @@ qual('Submit is grayed out while logged out, even with the goals still showing',
 // reasonable?" to question 7 in AGENTS.md). With the login button in the menu,
 // the footer has nothing to unfold for: logged out, it folds and unfolds like
 // logged in.
-qual('logged out, the footer stays as it was, the login button in the menu', async (page, bee) => {
+// SPEC CHANGE (login, 2026-10-12): this was "..., the login button in the
+// menu". The login button is in the drawer again (README wishlist 2), and the
+// footer still folds and unfolds logged out like logged in: the footer starts
+// out unfolded, so a new user sees the login button, and folding it away is
+// left to the user (decided with the person working on this, 2026-10-12).
+qual('logged out, the footer stays as it was, the login button in the info line', async (page, bee) => {
   await login(page)
   await tap(page, '#foldbut')
   await tap(page, '#bigbut', 2)
@@ -4375,14 +4489,13 @@ qual('logged out, the footer stays as it was, the login button in the menu', asy
   await expectError(page, bee, new RegExp(RegExp.escape(REAUTH)))
   assert.ok(!await unfolded(page), 'logged out')
   assert.ok(!await disabled(page, '#foldbut'), 'logged out: the fold button')
-  await menu(page)
-  assert.ok(await page.isVisible('#loginbut'), 'logged out: the login button, in the menu')
-  await see(page, '#loginbut', NOTALICE)
-  await page.keyboard.press('Escape')
-  await login(page, 'alice', 'tok456')
-  assert.ok(!await unfolded(page), 'logged in again')
+  assert.ok(!await page.isVisible('#loginbut'), 'logged out: the login button, folded away')
   await tap(page, '#foldbut')
   assert.ok(await unfolded(page), 'unfolded by hand')
+  assert.ok(await page.isVisible('#infoline #loginbut'),
+            'logged out: the login button, in the info line')
+  await login(page, 'alice', 'tok456')
+  assert.ok(await unfolded(page), 'logged in again')
   assert.equal(await count(page), 2)
 })
 
@@ -4585,8 +4698,8 @@ qual('at the usual text size, the drawer shows whole', async page => {
 // Chrome lets the page reach under the phone's navigation bar (as in an
 // installed app), and says how far up the bar reaches (here 48px), look at
 // the bar, unfolded and folded.
-// Expectata: −1, UNDO, Submit and the fold button all above the navigation
-// bar, where they can be tapped.
+// Expectata: −1, Clear, UNDO, Submit and the fold button all above the
+// navigation bar, where they can be tapped.
 // Resultata (before): the bar partly under the navigation bar: −1 from 784 to
 // 828px of 844, 32px into the navigation bar's 48.
 qual("the bar stays above the phone's own navigation bar", async page => {
@@ -4737,6 +4850,56 @@ qual('the help ends with links to the source and the sourcery', async page => {
   assert.equal(await status(page, APP + 'sourcery.html'), 200)
 })
 
+// Replicata: serve this directory at localhost, as a copy for trying out
+// changes, registered with Beeminder as an app of its own, with client ID
+// devclient and that URL to send logins back to, and listed in CLIENTS in
+// script.js; press the login button, and say yes on Beeminder.
+// Expectata: Beeminder asked to log in for that app, and to send the login
+// back to the copy, which then has its goals loaded.
+// Resultata (before): the copy asked for the live TallyBee's login, sent back
+// to the live TallyBee, which turned it away as one it didn't ask for.
+qual('a copy registered with Beeminder logs in where it is served', async (page, bee) => {
+  await page.route(/^http:\/\/localhost:\d+\//, r => r.continue())
+  let origin // the copy's, once it's served
+  await localhost(async url => {
+    origin = url.slice(0, -1)
+    await page.goto(url)
+    await tap(page, '#loginbut')
+    await page.waitForURL(AUTH + '**')
+    const p = new URL(page.url()).searchParams
+    assert.deepEqual([p.get('client_id'), p.get('redirect_uri')], ['devclient', url])
+    await page.goto(`${url}?` + new URLSearchParams({ access_token: TOKEN,
+      username: 'alice', state: p.get('state') }))
+    await see(page, '#goals', /pushups/)
+  }, (path, body) => path.endsWith('script.js')
+    ? String(body).replace('const CLIENTS = {', `const CLIENTS = {\n  '${origin}': 'devclient',`)
+    : body)
+})
+
+// Replicata: serve this directory at localhost, as a copy not registered with
+// Beeminder (not in CLIENTS in script.js); press the login button.
+// Expectata: an error, in plain view, says why the copy can't log in; and no
+// trip to Beeminder.
+// Resultata (before): off to Beeminder, for the live TallyBee's login, sent
+// back to the live TallyBee, which turned it away; and, once the copy said why
+// it couldn't log in (2026-10-12), it said so behind the menu, which stayed
+// open, as the login button was in the menu then.
+qual("a copy not registered with Beeminder can't log in, and says so", async (page, bee) => {
+  await page.route(/^http:\/\/localhost:\d+\//, r => r.continue())
+  await localhost(async url => {
+    await page.goto(url)
+    await tap(page, '#loginbut')
+    await see(page, '#status', /^Error: .*clientId/)
+    await expectError(page, bee, /clientId/)
+    // Nothing over the error: what's at its middle is it
+    assert.ok(await page.$eval('#status', e => { const r = e.getBoundingClientRect()
+      return e.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2))
+    }), 'the error in plain view')
+    assert.deepEqual(bee.authorizes, [])
+    assert.equal(page.url(), url)
+  })
+})
+
 // Replicata: serve this directory at localhost (as in the comment at the top
 // of script.js), copy the beeminder-token that the live TallyBee saved (see
 // beeminder.js) into the copy's localStorage, and reload it.
@@ -4882,6 +5045,79 @@ qual('even a long error leaves room to count and to press every button', async (
                                                return s.scrollTop > 0 }))
   const s = await box(page, '#status')
   assert.ok(s.y + s.height <= (await box(page, '#undobut')).y, JSON.stringify(s))
+})
+
+// The status line's lines of text wholly in sight, and how many it has in all
+const statuslines = page => page.$eval('#status', e => {
+  const box = e.getBoundingClientRect(), r = document.createRange()
+  r.selectNodeContents(e)
+  const lines = [...r.getClientRects()]
+  return { shown: lines.filter(l => l.top >= box.top && l.bottom <= box.bottom).length,
+           all: new Set(lines.map(l => l.top)).size }
+})
+
+// Replicata: on phones of various heights, folded, so that nothing else in
+// the footer needs the room, Submit when Beeminder is down, with a long error
+// page.
+// Expectata: as many whole lines of the error as fit in a tenth of the
+// screen, and at least one, with the rest there to scroll to: 4 lines on an
+// 844px tall phone, 3 on a 667px one, 2 with text at 200% (as 433px), and 1
+// on a phone turned sideways (390px).
+// Resultata (before): always 4 lines, which with text at 200%, once Clear
+// joined the bar, left the big button, folded, 160px of 433; and then, as
+// first fixed, always 2.
+for (const [width, height, lines] of [[390, 844, 4], [375, 667, 3], [200, 433, 2],
+                                      [844, 390, 1]])
+  qual(`a long error shows the whole lines that fit in a tenth of the screen, and scrolls for the rest (${width}x${height})`, async (page, bee) => {
+    await login(page)
+    await tap(page, '#foldbut')
+    bee.reply = c => c.method === 'POST'
+      ? [502, { errors: 'Bad gateway. '.repeat(50) }] : null
+    await tap(page, '#subbut')
+    await see(page, '#status', /502/)
+    await expectError(page, bee, /502/)
+    assert.equal((await statuslines(page)).shown, lines)
+    assert.ok(await page.$eval('#status', e => e.scrollHeight > e.clientHeight))
+  }, { viewport: { width, height } })
+
+// Replicata: on a computer whose font is taller than the lines it's set in,
+// as Noto Sans is (its letters reach 1069 and 293 thousandths of its size
+// above and below their baseline, 1.362 times its size in all, in lines 1.25
+// times its size apart), get a one-line error (Submit with no connection) and
+// a two-line one (Submit, connected again, once logged in on another device).
+// Expectata: nothing to scroll in either, so no scroll bar beside them.
+// Resultata (before): 1px to scroll in each, so Chrome and Firefox, which on
+// a computer show a scroll bar wherever there's anything to scroll, showed
+// one beside every message.
+qual('a message that fits has nothing to scroll, even in a font taller than its lines', async (page, bee) => {
+  await login(page)
+  // Roboto (see ROBOTO), made as tall as Noto Sans
+  await page.evaluate(async faces => {
+    for (const { range, data } of faces)
+      document.fonts.add(new FontFace('Quals Noto',
+        Uint8Array.from(atob(data), c => c.charCodeAt(0)),
+        { weight: '100 900', unicodeRange: range,
+          ascentOverride: '106.9%', descentOverride: '29.3%' }))
+    document.adoptedStyleSheets[0].replaceSync('body { font-family: "Quals Noto" }')
+    await document.fonts.ready
+  }, ROBOTO)
+  const fits = async lines => {
+    assert.equal((await statuslines(page)).all, lines)
+    const [scroll, client] = await page.$eval('#status',
+                                              e => [e.scrollHeight, e.clientHeight])
+    assert.ok(scroll <= client, `${lines} line(s): ${scroll}px to scroll, ${client}px in sight`)
+  }
+  bee.reply = () => 'abort'
+  await tap(page, '#subbut')
+  await see(page, '#status', /Error/)
+  await expectError(page, bee, /fetch/i)
+  await fits(1)
+  bee.reply = () => null
+  bee.tokens = ['tok456']
+  await tap(page, '#subbut')
+  await see(page, '#status', `Error: ${REAUTH}`)
+  await expectError(page, bee, new RegExp(RegExp.escape(REAUTH)))
+  await fits(2)
 })
 
 // Replicata: tap 3 and Submit, with your finger over the buttons.
@@ -5091,8 +5327,11 @@ qual('logged out, what needs a goal is grayed out', async page => {
 // FINAL DESIGN: but the username, logged in, plain text (a disabled login
 // button)
 // SPEC CHANGE (menu, 2026-10-08): the menu button, and the menu's controls
+// SPEC CHANGE (login, 2026-10-12): the username is in the footer again
+// SPEC CHANGE (username, 2026-10-12): the username is on the top line, and
+// the login button, hidden while logged in, is a control like the rest
 const small = page => page.$$eval(
-  '.footer :is(button, select, input, a), #menubut, .menu :is(button, select, a):not(#loginbut:disabled)',
+  '.footer :is(button, select, input, a), #menubut, .menu :is(button, select, a)',
   es => es.map(e => [e.id, e.getBoundingClientRect()])
     .filter(([, r]) => r.width > 0 && (r.width < 44 || r.height < 44)).map(([id]) => id))
 
@@ -5135,7 +5374,11 @@ qual('with a mouse, what can be clicked looks clickable', async page => {
   assert.equal(await page.$eval('#undobut', e => getComputedStyle(e).cursor), 'default',
                'UNDO, with nothing to undo')
   await tap(page, '#bigbut') // so there's something to undo
-  const fill = sel => page.$eval(sel, e => getComputedStyle(e).backgroundColor)
+  // Its colors: its fill's, and, for the goal's link, a plain link with no
+  // fill, its words'
+  // SPEC CHANGE (link, 2026-10-12): this was its fill's alone
+  const fill = sel => page.$eval(sel, e => { const s = getComputedStyle(e)
+    return [s.backgroundColor, s.color].join() })
   const cursor = sel => page.$eval(sel, e => getComputedStyle(e).cursor)
   assert.equal(await cursor('#bigbut'), 'pointer')
   const looks = async sel => {
@@ -5152,14 +5395,17 @@ qual('with a mouse, what can be clicked looks clickable', async page => {
     await page.mouse.move(0, 0) // so letting go doesn't click it
     await page.mouse.up()
   }
-  for (const sel of ['#minusbut', '#undobut', '#day', '#subbut', '#foldbut',
+  // SPEC CHANGE (clear, 2026-10-12): Clear, in the bar, not the menu
+  for (const sel of ['#minusbut', '#clearbut', '#undobut', '#day', '#subbut', '#foldbut',
                      '#menubut']) await looks(sel)
-  assert.equal(await cursor('#loginbut'), 'default') // the username: see its qual
+  // SPEC CHANGE (username, 2026-10-12): no username in the footer, which had
+  // the arrow, not the hand, as it can't be pressed (see "logged in, the
+  // username heads the top line, and there's no login button")
   // SPEC CHANGE (menu, 2026-10-08): the dropdown, the goal's link, Clear and
   // Help, in the menu, opened afresh for each: letting go of the mouse outside
   // the menu closes it (but for the dropdown, whose list the press opens, so
   // Escape closes the menu to be sure)
-  for (const sel of ['#goals', '#goallink', '#clearbut', '#infobut']) {
+  for (const sel of ['#goals', '#goallink', '#infobut']) {
     await menu(page)
     await looks(sel)
     await page.keyboard.press('Escape')
@@ -5265,13 +5511,15 @@ qual('the ring that shows where the keyboard is shows whole, even where the draw
 // Replicata: use TallyBee with a screen reader.
 // Expectata: the page in English; the day dropdown and the number to send
 // called by a word; the menu button called by a word, and the menu too; in
-// the menu, the goal dropdown and the goal's link called by a word, and Help
-// by its word; the × button called by a word, not "times"; and the help called
-// TallyBee.
+// the menu, the goal dropdown called by a word, the goal's link by its words,
+// beeminder.com/alice/pushups, and Help by its word; the × button called by a
+// word, not "times"; and the help called TallyBee.
 // Resultata (before): none of that.
 // SPEC CHANGE (menu, 2026-10-08): this was "...the ? and × buttons...": the
 // menu button and the menu's controls, which screen readers reach once it's
 // open
+// SPEC CHANGE (link, 2026-10-12): the goal's link is called by its words,
+// which say where it goes (README wishlist 4), not by a name of its own
 qual('screen readers get names for the dropdowns, the number, the link, the menu and × buttons, and the help', async page => {
   await login(page)
   assert.equal(await page.getAttribute('html', 'lang'), 'en')
@@ -5284,8 +5532,9 @@ qual('screen readers get names for the dropdowns, the number, the link, the menu
     await named(role, sel)
   await menu(page)
   await named('dialog', '#menu')
-  for (const [role, sel] of [['combobox', '#goals'], ['link', '#goallink']])
-    await named(role, sel)
+  await named('combobox', '#goals')
+  assert.equal(await page.getByRole('link', { name: 'beeminder.com/alice/pushups',
+                                              exact: true }).count(), 1, 'the link')
   assert.equal(await page.getByRole('button', { name: 'Help', exact: true }).count(), 1)
   await tap(page, '#infobut')
   assert.equal(await page.getByRole('dialog', { name: 'TallyBee' }).count(), 1)
@@ -5298,6 +5547,8 @@ qual('screen readers get names for the dropdowns, the number, the link, the menu
 // help's own words: "Just tap/click your screen to keep count of
 // something."; and the goal's link, which is no link while there's no goal,
 // says nothing then, rather than its arrow.
+// SPEC CHANGE (link, 2026-10-12): with no goal, the goal's link says
+// "beeminder.com", as it shows (README wishlist 4), and still no arrow
 // Resultata (before): the big button only "2", and in the footer, "↗".
 // SPEC CHANGE (menu, 2026-10-08): the goal's link is in the menu
 qual('screen readers hear what the big button is for, and no bare arrow', async page => {
@@ -5351,11 +5602,14 @@ qual("what the browser draws itself, like the dropdown's list, is dark", async p
 // Expectata: at the very top of the screen, folded or not, the goal's name and
 // its safesum; the tap counts, like any on the black; and pages' name and
 // safesum once it's picked.
+// SPEC CHANGE (username, 2026-10-12): the goal's name after the user's, as
+// Beeminder writes a goal, alice/pushups (see "logged in, the username heads
+// the top line, and there's no login button")
 qual('the top line shows the goal and its safesum, folded or not, and a tap on it counts', async page => {
   await page.goto(APP)
   assert.equal(await page.textContent('#topline'), ' ', 'logged out, with no goal')
   await login(page)
-  await see(page, '#goalname', 'pushups')
+  await see(page, '#goalname', 'alice/pushups')
   await see(page, '#safesum', '+2 pushups due by 12am')
   await tap(page, '#foldbut')
   assert.ok(await page.isVisible('#goalname') && await page.isVisible('#safesum'))
@@ -5366,7 +5620,7 @@ qual('the top line shows the goal and its safesum, folded or not, and a tap on i
   await see(page, '#bigbut', '1')
   await tap(page, '#foldbut')
   await choose(page, 'pages')
-  await see(page, '#goalname', 'pages')
+  await see(page, '#goalname', 'alice/pages')
   await see(page, '#safesum', 'safe for 3 days')
 })
 
@@ -5454,27 +5708,71 @@ for (const [width, height, opts] of [[390, 844], [320, 568], [844, 390], [1280, 
     assert.deepEqual(await where(), b, 'folded')
   }, { ...opts, viewport: { width, height } })
 
+// Replicata: logged in, so that the menu's first control that can be used is
+// the goal dropdown, tap the menu button; then log out, and tap it again.
+// Expectata: each time, the menu itself has the keyboard's focus as it opens,
+// not the goal dropdown, so that it's a tap on the dropdown that focuses it,
+// which is when an iPhone opens the list of goals.
+// Resultata (v2026.10.08c, when the login button headed the menu, and logged
+// in, only said who was logged in): logged in, the dropdown, the menu's first
+// control that could be used, got the focus as the menu opened, and on an
+// iPhone a tap on it then opened nothing. (Logged out, the login button got
+// it, and the dropdown worked.)
+qual('opening the menu leaves the goal dropdown for a tap to focus, as iPhones need', async page => {
+  await login(page)
+  const focused = () => page.evaluate(() =>
+    [document.activeElement.id, document.activeElement.className])
+  await tap(page, '#menubut')
+  assert.ok(await menuOpen(page))
+  assert.deepEqual(await focused(), ['', 'modal-content menu'], 'logged in')
+  await page.keyboard.press('Escape')
+  await page.evaluate(() => localStorage.removeItem('beeminder-token'))
+  await page.reload()
+  await tap(page, '#menubut')
+  assert.deepEqual(await focused(), ['', 'modal-content menu'], 'logged out')
+})
+
+// Replicata: on a computer, logged in, press Tab to the menu button, Enter, and
+// Tab again.
+// Expectata: the second Tab goes to the menu's first control that can be used
+// then, the goal dropdown, as the menu itself had the focus.
+// Resultata (in a mutant that left the focus where it was, on the menu
+// button): the second Tab went past the menu, to the footer.
+qual('Tab, in a menu just opened, goes to its first control that can be used', async page => {
+  await login(page)
+  await page.focus('#bigbut')
+  await page.keyboard.press('Tab')
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'menubut')
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Tab')
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'goals')
+}, DESK)
+
 // Replicata: log in, and open the menu; close it by pressing Escape, by
-// tapping outside it, by picking Help, by pressing Clear (after tapping 2),
-// and by picking pages.
-// Expectata: a sheet, with no header, listing, top to bottom: who's logged in
-// (alice), the goal dropdown with the goal's link beside it, Clear, and Help;
-// and each of those closes it: Help opens the help, Clear zeroes the count,
-// and picking pages loads pages.
+// tapping outside it, by picking Help, and by picking pages.
+// Expectata: a sheet, with no header, listing, top to bottom: the goal
+// dropdown, the goal's link under it, and Help, and not Clear, which is in
+// the bar; and each of those closes it: Help opens the help, and picking
+// pages loads pages.
 // Resultata (v2026.10.08b): the help, with Clear atop its text, and no
 // account, goal or link in it.
-qual('the menu lists the account, the goal with its link, Clear and Help, and closes on any pick', async page => {
+// SPEC CHANGE (login, 2026-10-12): this was "the menu lists the account, the
+// goal with its link, Clear and Help...": who's logged in, and the login
+// button, are in the footer again (README wishlist 2)
+// SPEC CHANGE (link, 2026-10-12): the goal's link is under the dropdown, a
+// row of its own, not beside it (README wishlist 4)
+// SPEC CHANGE (clear, 2026-10-12): this was "the menu lists the goal with its
+// link, Clear and Help...": Clear is in the bar (README wishlist 5)
+qual('the menu lists the goal with its link and Help, and closes on any pick', async page => {
   await login(page)
-  const rows = ['#loginbut', '#goals', '#clearbut', '#infobut']
+  const rows = ['#goals', '#goallink', '#infobut']
   await menu(page)
   assert.equal(await page.locator('#menu .modal-header').count(), 0, 'no header')
-  await see(page, '#loginbut', 'alice')
+  assert.equal(await page.locator('#menu #loginbut').count(), 0, 'no login button')
+  assert.equal(await page.locator('#menu #clearbut').count(), 0, 'no Clear')
   assert.equal(await page.innerText('#infobut'), 'Help')
   const ys = await Promise.all(rows.map(async s => (await box(page, s)).y))
   assert.deepEqual(ys, [...ys].sort((a, b) => a - b), `top to bottom: ${ys}`)
-  const [g, l] = [await box(page, '#goals'), await box(page, '#goallink')]
-  assert.ok(Math.abs(g.y + g.height / 2 - (l.y + l.height / 2)) < 1 && g.x + g.width < l.x,
-            'the link beside the dropdown')
   await page.keyboard.press('Escape')
   assert.ok(!await menuOpen(page), 'Escape')
   await menu(page)
@@ -5482,15 +5780,60 @@ qual('the menu lists the account, the goal with its link, Clear and Help, and cl
   assert.ok(!await menuOpen(page), 'tapping outside')
   await help(page)
   await tap(page, '#info .close')
-  await tap(page, '#bigbut', 2)
-  await clear(page)
-  await see(page, '#bigbut', '0')
   await choose(page, 'pages')
   assert.ok(!await menuOpen(page), 'picking a goal')
 })
 
+// Replicata: log in, on phones upright and sideways, big and small, and on a
+// computer, and tap the menu button, at the top right of the screen.
+// Expectata: the menu drops down from the button, as menus do from the button
+// that opens them (README wishlist 3): just under it, 8px below it, its right
+// edge lined up with the button's, as wide as its widest row needs, no wider,
+// and all on the screen; and, from the moment it opens, nowhere but there, so
+// that it grows out of the button rather than coming in from elsewhere.
+// Resultata (v2026.10.08c): a sheet at the bottom of the screen, as wide as
+// the screen (up to 640px), far from the button, sliding up from below the
+// screen's bottom edge.
+for (const [width, height, opts] of [[390, 844], [320, 568], [844, 390], [1280, 800, DESK]])
+  qual(`the menu drops down from the menu button (${width}x${height})`, async page => {
+    await login(page)
+    // Where the menu is the moment it opens, before it's drawn even once: open
+    // it and look, in one go
+    const first = await page.$eval('#menubut', b => {
+      b.click()
+      const r = document.getElementById('menu').getBoundingClientRect()
+      return { x: r.x, y: r.y, width: r.width, height: r.height }
+    })
+    assert.ok(await menuOpen(page))
+    await still(page, '#menu')
+    const [b, m] = [await box(page, '#menubut'), await box(page, '#menu')]
+    const at = JSON.stringify({ button: b, menu: m })
+    assert.ok(Math.abs(m.y - (b.y + b.height + 8)) < 1, `8px under the button: ${at}`)
+    assert.ok(Math.abs(m.x + m.width - (b.x + b.width)) < 1, `lined up with its right: ${at}`)
+    assert.ok(m.x >= 16 && m.y + m.height <= height, `on the screen: ${at}`)
+    // The width its widest row needs: its controls, 8px apart, and the
+    // menu's padding and border around them
+    const need = await page.$eval('#menu', d => {
+      const s = getComputedStyle(d.querySelector('.menu')), t = getComputedStyle(d)
+      const rows = [...d.querySelectorAll('.menu > *')].map(row => {
+        const cs = [...row.querySelectorAll('button, select, a')]
+        return cs.reduce((w, c) => w + c.getBoundingClientRect().width, 0) +
+               8 * (cs.length - 1)
+      })
+      return Math.max(...rows) + parseFloat(s.paddingLeft) + parseFloat(s.paddingRight) +
+             parseFloat(t.borderLeftWidth) + parseFloat(t.borderRightWidth)
+    })
+    assert.ok(Math.abs(m.width - need) < 1, `as wide as its widest row: ${need}, ${at}`)
+    assert.ok(first.x >= m.x - 1 && first.y >= m.y - 1 &&
+              first.x + first.width <= m.x + m.width + 1 &&
+              first.y + first.height <= m.y + m.height + 1,
+              `as it opens, within where it ends up: ${JSON.stringify(first)}, ${at}`)
+  }, { ...opts, viewport: { width, height } })
+
 // Replicata: with a goal with a long safesum, on phones upright and sideways,
 // big and small, look at the top line and the menu button.
+// SPEC CHANGE (username, 2026-10-12): and a long username, which is on the
+// top line now
 // Expectata: the top line's words at the top left, from the footer's left
 // margin, as an app's title is at the top left of its bar with the menu at
 // the right, and never under the menu button: at least 8px clear of it.
@@ -5500,7 +5843,8 @@ qual('the menu lists the account, the goal with its link, Clear and Help, and cl
 for (const [width, height] of [[390, 844], [320, 568], [280, 653], [844, 390], [568, 320]])
   qual(`the top line keeps clear of the menu button (${width}x${height})`, async (page, bee) => {
     bee.goals[0].safesum = '+0.73 chapters due in 2 days by 11:59pm'
-    await login(page)
+    bee.user.username = 'christophermoravec'
+    await login(page, 'christophermoravec')
     const m = await box(page, '#menubut')
     // Each line of the top line's words, as drawn
     const lines = await page.$eval('#topline', t => {
