@@ -4,37 +4,49 @@ import * as beeminder from './beeminder.js';
 function $(id) { return document.getElementById(id) } // to be jQuery-esque
 // -----------------------------------------------------------------------------
 
-const clientId = "6qi9cv7g647fisgzlz0flxwee"
-const redirectUri = "https://tallybee.beeminder.com/"
-// Beeminder sends a login back only to that URL, so a copy of TallyBee served
-// from this directory (like with `python3 -m http.server`, at
-// http://localhost:8000) can't log in itself. It can use the live TallyBee's
-// login, though, as Beeminder lets any page call its API: in the browser's
+// Beeminder's ID for TallyBee as an app that people log in to Beeminder from
+// (a client, in OAuth's jargon), for each place it's served from (an origin,
+// in the web's jargon): here, just the live TallyBee. A copy served elsewhere,
+// for trying out changes, logs in as an app of its own, registered with
+// Beeminder (at beeminder.com/apps/new) with the copy's origin, with no slash
+// after it, as where Beeminder sends logins back to (the redirect URL), once
+// whatever serves the copy adds that app's ID here as it serves this file. A
+// copy that's not in here can't log in itself: its login button fails loudly.
+const CLIENTS = {
+  'https://tallybee.beeminder.com': '6qi9cv7g647fisgzlz0flxwee',
+}
+const clientId = CLIENTS[location.origin]
+const redirectUri = location.origin + '/'
+// A copy that's not in CLIENTS, like one served from this directory with
+// `python3 -m http.server`, at http://localhost:8000, can still use the live
+// TallyBee's login, as Beeminder lets any page call its API: in the browser's
 // console on tallybee.beeminder.com, logged in, copy what
 // localStorage.getItem('beeminder-token') says, and on the copy, paste it into
 // localStorage.setItem('beeminder-token', ...) and reload. (Beeminder keeps one
 // token per app, so it's the same login in both: the copy's Submit sends
-// datapoints to your real goals. And the copy's login button, there once the
-// copy is logged out, logs you out everywhere: Beeminder makes a new token,
-// which stops the old one working on every device, and sends it to the live
-// TallyBee, which turns it away, as a login it didn't ask for: see UNASKED in
-// beeminder.js.)
-
-// What to tell the user when another TallyBee window (or tab, or home-screen
-// icon) changed the pending datapoint (see requestid, below) while this one was
-// waiting to submit it, like by submitting it first.
-const OTHERWIN = 
-  "Another TallyBee window changed the tally before this one could submit!"
+// datapoints to your real goals.)
 
 // Show any error, like Beeminder being unreachable or rejecting our token or an
-// assert failing, in the status line
-window.addEventListener('error', e => fail(e.error))
+// assert failing, in the status line. (One from a script from another site,
+// like one a browser extension adds, comes with no error in it, just the
+// event's message, "Script error.".)
+window.addEventListener('error', e => fail(e.error ?? e))
 window.addEventListener('unhandledrejection', e => fail(e.reason))
 
-// What TallyBee remembers, in localStorage. Every TallyBee tab and home-screen
-// icon on the device can share it, so it's read afresh wherever it's used. (A
-// goal's slug is its short name, the one in its URL, like the pushups in
-// beeminder.com/alice/pushups.)
+// What TallyBee remembers. What's each window's own (each tab's, or
+// home-screen icon's), the pending datapoint and what UNDO can put back, is in
+// the window's sessionStorage, which outlasts reloading, going to another
+// goal, and going to Beeminder to log in, but not closing the window. So it's
+// in localStorage too, under tallybee, for whichever window changed its own
+// last, for a window that opens with none of its own to take, if no other
+// TallyBee window is open (see OPEN): TallyBee closed and opened again has its
+// count back, but a window opened beside another starts afresh, rather than
+// with a copy of the other's, for both to send. What all windows share, which
+// goal was selected last and the fold, is in localStorage, under
+// tallybee-shared, where any TallyBee window on the device can change it, so
+// it's read afresh wherever it's used. (A goal's slug is its short name, the
+// one in its URL, like the pushups in beeminder.com/alice/pushups.)
+// The window's own (OWN):
 // count: taps, less −1s, not yet submitted to Beeminder (or what makes a
 //   number typed as the number to send: see #num)
 // requestid: Beeminder's idempotency key for the pending datapoint, the one
@@ -49,8 +61,8 @@ window.addEventListener('unhandledrejection', e => fail(e.reason))
 // comment: what the user typed to go with the pending datapoint (see submit),
 //   like "felt strong", or empty for nothing
 // day: the daystamp (Beeminder's way of writing a day, like 20261002) of the
-//   day picked for the pending datapoint, or null for today, whatever day that
-//   is when it's submitted (see daystamp)
+//   day picked for the pending datapoint, or null for today, whatever day
+//   that is for the page that submits it (see today)
 // undos: what each change since the last Submit changed, as it was before, for
 //   UNDO to put back, the last one last: {count}, for a tap, −1, or edit of the
 //   number to send; or, for a Clear, which also starts a new pending
@@ -59,18 +71,26 @@ window.addEventListener('unhandledrejection', e => fail(e.reason))
 //   since a Submit can change the pin after a tap.) Empty at first, and once a
 //   Submit gets to Beeminder (which can't be undone, and which takes UNDO away
 //   from taps made while it was sending, too).
+// What all windows share (SHARED):
 // slug: the goal selected last, for when TallyBee's URL doesn't name one
 // folded: whether the footer is folded, all but the bar (see #drawer in
 //   index.html). Only the fold button changes it.
+// (TallyBee from before windows had their own kept it all in localStorage,
+// under tallybee, which a window that opens with none of its own takes, as
+// above, the fold and the goal selected last too, till a window remembers
+// anything.)
 // (What TallyBee remembered when UNDO could take back only the last change has
 // a prev, that change, or null, for none, instead of undos; and before that,
 // no prev, for none.)
 // (And what it remembered before there were comments, folding, or days gets no
 // comment, unfolded, for today.)
+const OWN = ['count', 'requestid', 'pin', 'comment', 'day', 'undos']
+const SHARED = ['slug', 'folded']
 function load() {
   const { prev = null, ...t } = { comment: '', folded: false, day: null,
-    ...JSON.parse(localStorage.getItem('tallybee')) ??
-    { count: 0, requestid: crypto.randomUUID(), pin: null, slug: null, undos: [] } }
+    ...JSON.parse(sessionStorage.getItem('tallybee') ??
+                  localStorage.getItem('tallybee')) ?? { slug: null, ...blank() },
+    ...JSON.parse(localStorage.getItem('tallybee-shared')) }
   return valid({ undos: prev === null ? [] : [prev], ...t })
 }
 
@@ -95,18 +115,26 @@ function valid(t) {
 function update(f) {
   const t = load()
   f(t)
-  localStorage.setItem('tallybee', JSON.stringify(valid(t)))
+  const own = JSON.stringify(pick(valid(t), OWN))
+  sessionStorage.setItem('tallybee', own)
+  localStorage.setItem('tallybee', own)
+  localStorage.setItem('tallybee-shared', JSON.stringify(pick(t, SHARED)))
   render()
 }
 
 // Start a new pending datapoint (see requestid and pin), with no comment, for
-// today
+// today, in t, and return t
 function fresh(t) {
   t.requestid = crypto.randomUUID()
   t.pin = null
   t.comment = ''
   t.day = null
+  return t
 }
+
+// What a window that starts afresh has of its own (see OWN): a new pending
+// datapoint, with a count of 0, and nothing to undo
+const blank = () => fresh({ count: 0, undos: [] })
 
 // The fields of t named in keys
 const pick = (t, keys) => Object.fromEntries(keys.map(k => [k, t[k]]))
@@ -124,17 +152,18 @@ function change(keys, f) {
 // An edit of a text field, the comment or the number to send, from when it
 // gets the focus till it loses it, is one change, for UNDO, which puts back
 // what it changed as it was just before the edit's first keystroke. (Not as it
-// was when the field got the focus, since another window can change it in
-// between, as by submitting it.) Each keystroke gets remembered at once, with
-// edited.
+// was when the field got the focus, since a Clear or an UNDO can change it in
+// between, where pressing a button leaves the field the focus, like in
+// Safari.) Each keystroke gets remembered at once, with edited.
 // before: the pending datapoint (its requestid) for which the edit under way
 // has given UNDO a way back to before it: null from when the field gets the
 // focus till the edit's first keystroke, and again after an UNDO during the
 // edit (as when a button doesn't take the focus, like in Safari); undefined
-// between edits. So once another pending datapoint starts during the edit, as
-// when a Submit, from this window or another, gets to Beeminder (which takes
-// UNDO's way back away: see undos), the edit's next keystroke gives UNDO a way
-// back again.
+// between edits. So once another pending datapoint starts during the edit,
+// as with a Clear, the edit's next keystroke gives UNDO a way back to just
+// before it, after the Clear, rather than leaving UNDO of the Clear to take the
+// keystrokes back too. (A Submit can't start one during an edit: it grays out
+// the fields, which ends the edit.)
 let before
 function edits(field) {
   field.addEventListener('focus', () => { before = null })
@@ -152,6 +181,17 @@ function edited(keys, f) {
     before = t.requestid
   })
 }
+
+// Whether another TallyBee window is open: each holds this lock, shared, for
+// as long as it's open (the browser lets go of it as the window closes). A
+// window that opens beside another, with nothing of its own yet, starts
+// afresh, rather than taking the tally TallyBee remembers (see load), which
+// may be the other's.
+const OPEN = 'tallybee-open'
+if ((await navigator.locks.query()).held.some(l => l.name === OPEN) &&
+    sessionStorage.getItem('tallybee') === null)
+  sessionStorage.setItem('tallybee', JSON.stringify(blank()))
+navigator.locks.request(OPEN, { mode: 'shared' }, () => new Promise(() => {}))
 
 // This page's goal: the one its URL names, else the one selected last (or, the
 // first time, till the goals load, none)
@@ -263,14 +303,29 @@ const kept = JSON.parse(sessionStorage.getItem('tallybee-goals')) ?? { user: NOU
 let { goals, user } = kept.user.username === beeminder.getUsername()
   ? goalscheck(kept.goals, kept.user) : { goals: [], user: NOUSER }
 
-// The daystamp of the day k days before today, for goal g, as Beeminder counts
-// days: in the user's timezone, with each day ending at g's deadline
-function daystamp(g, k) {
-  const [y, m, d] = new Intl.DateTimeFormat('en-CA', { timeZone: user.timezone })
-    .format(Date.now() - g.deadline * 1000).split('-').map(Number) // like 2026-10-02
-  return new Date(Date.UTC(y, m - 1, d - k)).toISOString().slice(0, 10)
-    .replaceAll('-', '')
+// The daystamp of the day it is now for goal g, as Beeminder counts days: in
+// the user's timezone, with each day ending at g's deadline. (From the date's
+// parts, like 2026, 10 and 02, not from the date as the browser writes it,
+// which is up to the locale's ways.)
+function daystamp(g) {
+  const { year, month, day } = Object.fromEntries(new Intl.DateTimeFormat('en', {
+    timeZone: user.timezone, year: 'numeric', month: '2-digit', day: '2-digit' })
+    .formatToParts(Date.now() - g.deadline * 1000).map(p => [p.type, p.value]))
+  return year + month + day
 }
+
+// The daystamp of the day k days before the day with daystamp ds
+const back = (ds, k) => new Date(Date.UTC(ds.slice(0, 4), ds.slice(4, 6) - 1,
+  ds.slice(6) - k)).toISOString().slice(0, 10).replaceAll('-', '')
+
+// The page's today: the day it was for the page's goal (see daystamp) as the
+// page loaded, or, if the goal wasn't among the goals kept then (see goals),
+// as the goals first loaded with it, since the day depends on the goal. It
+// stays the same till the page loads again, even once the goal's deadline has
+// passed, so that the days to pick from, and the day Submit sends a datapoint
+// for, never change under you; a banner says when it's out of date (see
+// #newday).
+let today = daystamp(goal())
 
 // How many days the day dropdown offers: today and the 6 before it
 const DAYS = 7
@@ -286,17 +341,17 @@ function dayname(ds, k) {
   return `${a[0].toUpperCase()}${a.slice(1)} (${d}${SUFFIX[ordinal.select(d)]})`
 }
 
-// The days the day dropdown offers, for goal g, as [daystamp, k days before
-// today]: the last DAYS of them, and day, if it was picked longer ago than that
-function days(g, day) {
-  const ds = [...Array(DAYS).keys()].map(k => daystamp(g, k))
+// The days the day dropdown offers, as [daystamp, k days before today]: the
+// last DAYS of them, and day, if it was picked longer ago than that
+function days(day) {
+  const ds = [...Array(DAYS).keys()].map(k => back(today, k))
   const utc = s => Date.UTC(s.slice(0, 4), s.slice(4, 6) - 1, s.slice(6))
-  return [...new Set([...ds, day ?? ds[0]])]
-    .map(s => [s, (utc(ds[0]) - utc(s)) / 864e5])
+  return [...new Set([...ds, day ?? today])]
+    .map(s => [s, (utc(today) - utc(s)) / 864e5])
 }
 
 // The comment field's placeholder, from index.html, for when the goal has no
-// datapoint to take one from (see render)
+// datapoint, or none with a comment, to take one from (see render)
 const PLACEHOLDER = $('comment').placeholder
 
 // Make the page show the current state of things
@@ -313,8 +368,8 @@ function render() {
   $('num').value = minus ? '-' : v
   // As wide as what it says, typed or not (see style.css)
   $('num').style.setProperty('--len', $('num').value.length)
-  // The top line: the goal's name, and its safesum (none, with no goal)
-  $('goalname').textContent = g.slug
+  // The top line: the goal's name (see the goal's link, below), and its
+  // safesum (none, with no goal)
   $('safesum').textContent = g.safesum
   $('safesum').setAttribute('aria-busy', g.queued) // grayed out: out of date
   // The datapoint added to the goal last, as Beeminder's own site shows it:
@@ -323,8 +378,9 @@ function render() {
   const dp = g.last_datapoint
   $('lastdp').textContent = dp === null ? '' : `${dp.daystamp.slice(6)} ${dp.value}` +
     (dp.comment === '' ? '' : ` "${dp.comment}"`)
-  // As in Beeminder's own form, the comment field shows the last comment
-  $('comment').placeholder = (dp ?? { comment: PLACEHOLDER }).comment
+  // As in Beeminder's own form, the comment field shows the last comment, if
+  // any (with none, as with no datapoint, it says what it's for)
+  $('comment').placeholder = dp?.comment || PLACEHOLDER
   $('sigma').hidden = !g.kyoom
   // Logged out, as after Beeminder rejects our token, the goals can still be
   // there, as they last loaded, but nothing can be sent to them
@@ -335,9 +391,9 @@ function render() {
   // (Setting it to what it says already, as after each keystroke, leaves the
   // cursor where it is)
   $('comment').value = t.comment
-  $('day').replaceChildren(...days(g, t.day)
+  $('day').replaceChildren(...days(t.day)
     .map(([ds, k]) => new Option(dayname(ds, k), ds)))
-  $('day').value = t.day ?? daystamp(g, 0)
+  $('day').value = t.day ?? today
   $('undobut').disabled = busy || t.undos.length === 0
   $('drawer').hidden = t.folded
   $('foldbut').setAttribute('aria-expanded', !t.folded)
@@ -345,19 +401,29 @@ function render() {
   // And with no goals, like when logged out, there's nothing to pick, and no
   // telling what day it is for the goal.
   $('goals').disabled = $('day').disabled = busy || goals.length === 0
-  // The goal's page on Beeminder; with no goal, no link (grayed out: see
-  // style.css)
-  if (g === NOGOAL) $('goallink').removeAttribute('href')
-  else $('goallink').href = `https://www.beeminder.com/${user.username}/${g.slug}`
+  // The goal's name on the top line, after the user's, as Beeminder writes a
+  // goal, like alice/pushups, as README open question 5 has it
+  // ("username/goalname"); and the goal's page on Beeminder, its link's words
+  // saying where it goes, as the README's wishlist 4 has it:
+  // "beeminder.com/USER/GOAL". With no goal, the user's name alone (none,
+  // before the goals load), and just beeminder.com, with no link (grayed out:
+  // see style.css).
+  if (g === NOGOAL) { $('goalname').textContent = user.username
+                      $('goallink').textContent = 'beeminder.com'
+                      $('goallink').removeAttribute('href') }
+  else { $('goalname').textContent = `${user.username}/${g.slug}`
+         $('goallink').textContent = `beeminder.com/${user.username}/${g.slug}`
+         $('goallink').href = `https://www.beeminder.com/${user.username}/${g.slug}` }
   $('infinibee').hidden = !busy
-  // Login button's label when not logged in (when logged
-  // in it shows the username). graph.beeminder.com's login button says "Log in
-  // with your Beeminder account".
-  $('loginbut').textContent = beeminder.getUsername() ?? 'Log in with your Beeminder account'
-  // Logged in, it only says who's logged in: pressing it would log in again,
-  // which gets a new token, and so logs TallyBee out on your other devices
-  // (Beeminder keeps one token per app)
-  $('loginbut').disabled = !out
+  // Logged in, the login button is hidden, as the top line says who's logged
+  // in (see #goalname): pressing it would log in again, which gets a new token,
+  // and so logs TallyBee out on your other devices (Beeminder keeps one token
+  // per app)
+  $('loginbut').hidden = !out
+  // What has the keyboard's focus and just got grayed out, like UNDO with
+  // nothing left to undo, hands it to the big button, so that Space counts
+  // again, rather than letting the browser drop it onto nothing
+  if (document.activeElement.disabled) $('bigbut').focus()
 }
 
 // Show message msg in the status line, styled according to kind: busy, ok, err
@@ -386,9 +452,9 @@ function bump(d) {
 // one of the Web Locks API's two modes: exclusive, for sending a datapoint,
 // which runs alone; or shared, for loading the goals, and for Clear and UNDO,
 // which can run alongside each other but not alongside a send. So goals we
-// fetch are never older than datapoints we've sent, no window submits, clears,
-// or undoes a datapoint that another is sending, and Clear and UNDO don't wait
-// for goals to load (unless a send is waiting for them too).
+// fetch are never older than datapoints we've sent, no window clears or undoes
+// a datapoint that it's sending, and Clear and UNDO don't wait for goals to
+// load (unless a send is waiting for them too).
 // An error doesn't stall things: the lock goes to what's next, and the error,
 // which nothing here catches, shows up in the status line like any other (see
 // the unhandledrejection listener). (The browser lets go of the lock if a
@@ -428,9 +494,12 @@ async function loadGoals() {
   const g = gs.find(g => g.slug === slug) ?? NOGOAL
   if (g !== NOGOAL) g.last_datapoint = await beeminder.getLastAdded(g.slug) ?? null
   if (g.last_datapoint !== null) dpcheck(g.last_datapoint)
-  // Everything's here now, so show it all at once
+  // Everything's here now, so show it all at once. The goals that first
+  // bring the page's goal set its today (see today).
+  const unknown = goal() === NOGOAL
   goals = gs
   user = u
+  if (unknown) today = daystamp(goal())
   sessionStorage.setItem('tallybee-goals', JSON.stringify({ goals, user }))
   dropdown()
   history.replaceState(null, '', goalurl(slug))
@@ -444,13 +513,13 @@ async function loadGoals() {
 // Send the count, as it was when Submit got pressed, to Beeminder as a
 // datapoint on this page's goal. Submit stays grayed out till Beeminder replies,
 // but taps keep counting meanwhile, for next time.
-// The comment that goes with it, too, is the one from when Submit got pressed:
-// the user's, as typed, and then which app sent it, and when. (A space goes
-// between the two, so there's none with no comment.) And so is its day: the
-// one picked, or else the day it was then (see day).
+// The comment that goes with it, too, is the one from when Submit got pressed,
+// as typed (empty for none: Beeminder keeps which app sent a datapoint, and
+// when, on its own). And so is its day: the one picked, or else the page's
+// today (see day).
 function submit() {
   const { count: n, requestid, comment, day } = load()
-  const ds = day ?? daystamp(goal(), 0)
+  const ds = day ?? today
   busy = true
   // status line while waiting for Beeminder to take the datapoint
   say('busy', 'Submitting…')
@@ -462,14 +531,10 @@ function submit() {
       const { pin } = load() // as it was before this send
       // Pin the pending datapoint's base, if this is its first time out, or it
       // was last sent to another goal
-      update(t => {
-        beeminder.assert(t.requestid === requestid, OTHERWIN)
-        t.pin = pinned(g, t)
-      })
+      update(t => { t.pin = pinned(g, t) })
       const t = load()
       const dp = await beeminder.addDatapoint(g.slug, add(n, t.pin.base), ds,
-        `${comment}${comment === '' ? '' : ' '}via TallyBee at ${new Date()}`,
-        t.requestid).catch(e => {
+        comment, t.requestid).catch(e => {
           // Beeminder turned this send away for want of a login it accepts, so
           // the datapoint didn't get there this time, and gets no pin from it
           if (e.message === beeminder.REAUTH) update(t => { t.pin = pin })
@@ -478,7 +543,6 @@ function submit() {
       g.last_datapoint = dpcheck(dp)
       g.queued = true // as Beeminder has it now, till the goals load again
       update(t => {
-        beeminder.assert(t.requestid === requestid, OTHERWIN)
         t.count = add(t.count, -n)
         fresh(t)
         t.undos = []
@@ -486,6 +550,7 @@ function submit() {
       // status line once Beeminder has the datapoint, with its value and
       // goal (Beedroid says "Submission successful!")
       say('ok', `✓ Submission successful: ${dp.value} → ${g.slug}`)
+      sent.postMessage(g.slug)
       poll()
     } finally {
       busy = false
@@ -502,12 +567,11 @@ function submit() {
 $('bigbut').addEventListener('pointerup', e => {
   if (e.isPrimary && e.button === 0) bump(1)
 })
-// A tap while the number to send is being typed ends that edit first (see
-// #num), and then counts, as a change of its own, for UNDO
-$('bigbut').addEventListener('pointerdown', () => $('num').blur())
-// A tap while the comment is being typed ends that edit first (see #comment),
-// and then counts, as a change of its own, for UNDO
-$('bigbut').addEventListener('pointerdown', () => $('comment').blur())
+// A tap while the number to send, or the comment, is being typed ends that
+// edit first (see #num and #comment), and then counts, as a change of its own,
+// for UNDO
+$('bigbut').addEventListener('pointerdown', () => { $('num').blur()
+                                                    $('comment').blur() })
 $('bigbut').addEventListener('contextmenu', e => e.preventDefault())
 // On a keyboard, Space and Enter count, as they'd press any button, once per
 // press, however long the key is held (a held key repeats)
@@ -517,7 +581,10 @@ $('bigbut').addEventListener('keydown', e => {
 // The big button starts out with the keyboard's focus, so that Space counts
 // right away, but with no ring around it till the keyboard moves the focus
 $('bigbut').focus({ focusVisible: false })
-$('minusbut').addEventListener('click', () => bump(-1))
+// Tell screen readers the count, as after −1, UNDO or Clear, whose button has
+// the focus, not the count (see #said)
+const announce = () => { $('said').textContent = $('count').textContent }
+$('minusbut').addEventListener('click', () => { bump(-1); announce() })
 // What's typed as the number to send is the number to send, at each keystroke:
 // the count becomes that number, less the base on an odometer-like goal (see
 // livebase), and the field then shows it as JavaScript writes it, like 5 for
@@ -547,11 +614,13 @@ $('num').addEventListener('blur', () => {
 $('numform').addEventListener('submit', () => $('num').blur())
 // Clearing the count also starts a new pending datapoint, so the next Submit
 // can't overwrite one that Beeminder got without our hearing back. It waits
-// its turn (see enqueue), like for another window to finish submitting, and so
-// does UNDO, which can bring back the datapoint that a Clear replaced.
-$('clearbut').addEventListener('click', () => enqueue('shared',
-  () => change(['count', 'requestid', 'pin', 'comment', 'day'],
-               t => { t.count = 0; fresh(t) })))
+// its turn (see enqueue), like for a Submit to finish, and so does UNDO, which
+// can bring back the datapoint that a Clear replaced.
+$('clearbut').addEventListener('click', () => enqueue('shared', () => {
+  change(['count', 'requestid', 'pin', 'comment', 'day'],
+         t => { t.count = 0; fresh(t) })
+  announce()
+}))
 // After an UNDO during an edit, the edit's next keystroke gives UNDO a way back
 // again (see edits)
 $('undobut').addEventListener('click', () => enqueue('shared', () => {
@@ -560,6 +629,7 @@ $('undobut').addEventListener('click', () => enqueue('shared', () => {
     Object.assign(t, t.undos.pop())
   })
   before &&= null
+  announce()
 }))
 // Every keystroke in the comment gets remembered at once. One edit of it is one
 // change, for UNDO (see edits).
@@ -579,6 +649,13 @@ $('comment').addEventListener('keydown', e => {
 // The fold button folds away the drawer, or brings it back
 $('foldbut').addEventListener('click', () => update(t => { t.folded = !t.folded }))
 $('subbut').addEventListener('click', submit)
+// The × at the end of a message takes it away (see #msgline), handing the
+// keyboard's focus, which it had if pressed from the keyboard, to the big
+// button, as when a control gets grayed out (see render)
+$('dismiss').addEventListener('click', () => {
+  say('', '')
+  $('bigbut').focus()
+})
 // Picking a goal, in the menu, closes the menu and loads the goal's page,
 // which can take a while; till it comes, TallyBee is busy, and shows it
 $('goals').addEventListener('change', () => {
@@ -587,14 +664,17 @@ $('goals').addEventListener('change', () => {
   $('menu').close()
   location.replace(goalurl($('goals').value))
 })
+// Login button's label (logged in, it's hidden: see render).
+// graph.beeminder.com's login button says "Log in with your Beeminder
+// account".
+$('loginbut').textContent = 'Log in with your Beeminder account'
 // The login button sends you to Beeminder, which sends you right back (with an
 // access token) if you've authorized TallyBee before. When you're logged in, it
-// shows your username instead, and can't be pressed (see render).
+// is hidden (see render).
 $('loginbut').addEventListener('click',
                                () => beeminder.login(clientId, redirectUri))
 // The menu button opens the menu, and the help button, in the menu, closes the
-// menu and opens the help. (Clear, in the menu, closes it as its form says: see
-// index.html.)
+// menu and opens the help.
 $('menubut').addEventListener('click', () => $('menu').showModal())
 $('infobut').addEventListener('click', () => { $('menu').close()
                                                $('info').showModal() })
@@ -607,18 +687,19 @@ for (const id of ['menu', 'info']) {
 // Safari on iPhones shows a button as pressed (see :active in style.css) only
 // while something is listening for touches, so this listens, and does nothing
 document.body.addEventListener('touchstart', () => {}, { passive: true })
-// Show what other TallyBee tabs and icons change, like their taps. When one
-// logs in or out, or changes which datapoint is pending (see requestid), as a
-// Submit that gets to Beeminder does (which can change an odometer goal's
-// value), and so do a Clear and the UNDO of one, load the goals again too.
-// (Not on every change: loading the goals changes what's remembered, which
-// would set off the other windows, and so on forever.)
+// Show what other TallyBee windows change of what they share with this one
+// (see load), like the fold. When one logs in or out, load the goals again
+// too. (Not on every change: loading the goals changes what's remembered,
+// which would set off the other windows, and so on forever.)
 window.addEventListener('storage', e => {
   render()
-  if (e.key !== 'tallybee' ||
-      JSON.parse(e.oldValue)?.requestid !== JSON.parse(e.newValue)?.requestid)
-    refresh()
+  if (!['tallybee', 'tallybee-shared'].includes(e.key)) refresh()
 })
+// Other TallyBee windows hear when this one's datapoint gets to Beeminder, and
+// load the goals again, as it can change their goal, like its safesum, or, on
+// an odometer-like goal, its reading
+const sent = new BroadcastChannel('tallybee')
+sent.addEventListener('message', refresh)
 // Load the goals, when logged in: when the page loads, and again when you come
 // back to TallyBee, to refresh things like their safesums, and when the
 // connection comes back, as after TallyBee opened with none (see sw.js)
@@ -629,6 +710,23 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden) refresh()
 })
 window.addEventListener('online', refresh)
+
+// Once it's another day for the page's goal than the page's today (see
+// today), the goal's deadline having passed, the days to pick from are out of
+// date, and so is what Beeminder said of the goal before then, like its
+// safesum, so a banner says so, with a button that loads the page again, as
+// on beeminder.com, rather than anything changing under you (README open
+// question 7). It looks every second, till the banner's × takes it away, for
+// good, the day being one that can't come back (see today); and, like the ×
+// at the end of a message, hands the keyboard's focus to the big button.
+const newday =
+  setInterval(() => { $('newday').hidden = daystamp(goal()) === today }, 1000)
+$('reload').addEventListener('click', () => location.reload())
+$('newdayx').addEventListener('click', () => {
+  clearInterval(newday)
+  $('newday').hidden = true
+  $('bigbut').focus()
+})
 
 // Let TallyBee open with no connection (see sw.js), where browsers can
 navigator.serviceWorker?.register('sw.js')

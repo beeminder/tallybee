@@ -34,17 +34,34 @@
      infinibee, which taps go right through, to the big button (see
      style.css), and the menu button, at the top right corner, which takes
      its own -->
+<!-- The banner that says that the goal's day is over, so that what TallyBee
+     shows, like the safesum, and the days to pick from, is from before the
+     goal's deadline, with a button that loads the page again (see script.js):
+     beeminder.com's, which its dashboard shows then (its #flash-js), words
+     and all, across the top of the screen (see style.css). Its × takes it
+     away till the page loads again. -->
+<div id="newday" hidden>
+<button id="newdayx" aria-label="Close"><svg viewBox="0 0 16 16" width="20"
+  height="20" fill="none" stroke="currentColor" stroke-width="2"
+  stroke-linecap="round" aria-hidden="true"><path d="M3 3l10 10M13 3L3 13"/></svg></button>
+<span>A new day has dawned – <button id="reload">Refresh Page</button></span>
+</div>
 <div id="stage">
 <!-- The big button is a button to the keyboard too: see script.js. Its number
      is script.js's to show: till then, it shows none, rather than one that may
      be wrong, as on an odometer-like goal. Screen readers describe it in the
      help's words (see #tapping). -->
 <div id="bigbut" role="button" tabindex="0" aria-describedby="tapping"><span id="count"></span></div>
+<!-- For screen readers, the count again, once −1, UNDO or Clear changes it, as
+     they have the focus then, not the count (see script.js). It takes no room
+     on the screen. -->
+<div id="said" aria-live="polite"></div>
 <div id="top">
 <!-- The top line: what the goal is, and what Beeminder says about it, small
      and gray, at the very top of the screen, folded or not: the goal's name
-     (its slug), and its safesum, Beeminder's summary of what's due, like "+2
-     pushups due by 12am" (see script.js). With no goal, it's empty. -->
+     (its slug), after its user's, like alice/pushups, and its safesum,
+     Beeminder's summary of what's due, like "+2 pushups due by 12am" (see
+     script.js). With no goal, it's the user's name alone, if any. -->
 <div id="topline"><span id="goalname"></span> <span id="safesum"></span></div>
 <!-- While we wait on Beeminder, the infinibee (Beeminder's bee logo, from
      beeminder.com/press) flies a lemniscate (a figure eight; see style.css),
@@ -69,16 +86,28 @@
 <!-- The status line comes first, so that a message, like the one Submit shows
      at once, grows the footer up into the big button rather than moving a
      control out from under the finger that just tapped it. Screen readers
-     read out each new message. -->
+     read out each new message. The × at its end takes the message away (see
+     script.js). -->
+<div id="msgline">
 <span id="status" role="status"></span>
+<!-- TODO: what screen readers call the × at the end of a message, which takes
+     the message away, like "Dismiss" -->
+<button id="dismiss" aria-label="Dimitte"><svg viewBox="0 0 16 16" width="12"
+  height="12" fill="none" stroke="currentColor" stroke-width="2"
+  stroke-linecap="round" aria-hidden="true"><path d="M3 3l10 10M13 3L3 13"/></svg></button>
+</div>
 <!-- The drawer: the controls that the fold button, at the right end of the
      bar below, folds away and brings back (see script.js). The bar itself
      never folds away, and never moves. -->
 <div id="drawer">
-<!-- The info line: the datapoint added to the goal last, as Beeminder's own
-     site shows it (see script.js). It's words only, which a touch just below
-     the big button lands on, rather than on a control (see style.css). -->
+<!-- The info line: logged out, the login button; and the datapoint added to
+     the goal last, as Beeminder's own site shows it (see script.js). Logged
+     in, it's words only, which a touch just below the big button lands on,
+     rather than on a control (see style.css). -->
 <div id="infoline">
+<!-- The login button sends you to Beeminder to log in; logged in, it's
+     hidden, as the top line says who's logged in (see script.js). -->
+<button id="loginbut"></button>
 <span id="lastdp"></span>
 </div>
 <!-- The form row: the pending datapoint, in the order of Beeminder's own
@@ -102,9 +131,9 @@
 <!-- The comment that goes with the pending datapoint. Enter, the phone
      keyboard's done key, puts the keyboard away (see script.js). Like the
      number to send, it starts out grayed out, so that nothing typed in it
-     before script.js runs gets lost. Its placeholder is for when the goal has
-     no datapoints, or there's no goal: otherwise it's the goal's last
-     datapoint's comment (see script.js). -->
+     before script.js runs gets lost. Its placeholder is for when the goal's
+     last datapoint has no comment, or there's no such datapoint: otherwise
+     it's that comment (see script.js). -->
 <input id="comment" aria-label="Comment" placeholder="Comment (optional)"
   autocomplete="off" enterkeyhint="done" disabled>
 </div>
@@ -112,9 +141,16 @@
 <!-- The bar: all that a counting session needs. -->
 <div id="bar">
 <!-- −1 takes one off, and UNDO undoes whatever was done last: a tap, a −1, a
-     typed number, an edit of the comment, or a Clear (see script.js). -->
+     typed number, an edit of the comment, or a Clear (see script.js). Clear,
+     which wipes out the count (though UNDO brings it back), sits between them,
+     so that −1 and UNDO aren't side by side (README wishlist 5). Like UNDO, it
+     starts out grayed out, with nothing to clear till script.js shows the
+     count. -->
 <div>
 <button id="minusbut">−1</button>
+<!-- label for the button that zeroes the count without submitting it
+     (Beedroid's is "Clear") -->
+<button id="clearbut" disabled>Clear</button>
 <button id="undobut" disabled>UNDO</button>
 <!-- On goals that sum their datapoints (cumulative, or kyoom, in Beeminder
      jargon), a sigma, as on the button of Beeminder's own form, "Add progress
@@ -130,33 +166,27 @@
 </div> <!-- bar -->
 </div> <!-- footer -->
 
-<!-- The menu: a sheet that the menu button opens, listing what a counting
-     session doesn't need, each on a row of its own: who's logged in (or,
-     logged out, the login button), the goal, with its page on Beeminder,
-     Clear, and the help. Picking anything in it closes it, as does a tap
-     outside it, or Escape (see script.js). -->
+<!-- The menu: a box that drops down from the menu button (see style.css),
+     listing what a counting session doesn't need, each on a row of its own:
+     the goal, its page on Beeminder, and the help. Picking anything in it
+     closes it, as does a tap outside it, or Escape (see script.js). -->
 <dialog id="menu" aria-label="Menu">
-<div class="modal-content menu">
-<!-- The login button sends you to Beeminder to log in; logged in, it only
-     says who's logged in (see script.js). -->
-<div><button id="loginbut"></button></div>
+<!-- The menu itself takes the keyboard's focus as it opens (autofocus), not
+     its first control that can be used then, which, logged in, is the goal
+     dropdown: an iPhone opens a dropdown's list only at the tap that focuses
+     it, so a dropdown that already had the focus would open nothing. -->
+<div class="modal-content menu" tabindex="-1" autofocus>
 <div>
-<!-- The goal the count goes to, and its page on Beeminder -->
+<!-- The goal the count goes to -->
 <select name="goals" id="goals" aria-label="Beeminder goal" disabled></select>
-<!-- The goal's page on Beeminder, opening apart from TallyBee. With no goal,
-     it's no link, and grayed out, and screen readers say nothing of it (its
-     name is for the link; its arrow is for the eye). -->
-<a id="goallink" target="_blank" aria-label="Beeminder goal page"><span aria-hidden="true">↗</span></a>
 </div>
-<!-- Clear, which wipes out the count (though UNDO can bring it back), sits
-     apart from the rest, in the menu, far from UNDO. Its form closes the menu
-     once it's pressed, as picking anything in a menu does, showing the count,
-     now 0, and UNDO. -->
-<form method="dialog">
-<!-- label for the button that zeroes the count without submitting it
-     (Beedroid's is "Clear") -->
-<button id="clearbut">Clear</button>
-</form>
+<div>
+<!-- The goal's page on Beeminder, opening apart from TallyBee: a plain link,
+     whose words say where it goes, like beeminder.com/alice/pushups (see
+     script.js), and are what screen readers call it. With no goal, it's just
+     beeminder.com, and no link, and grayed out. -->
+<a id="goallink" target="_blank"></a>
+</div>
 <!-- The help button, which closes the menu and opens the help (see
      script.js) -->
 <div><button id="infobut">Help</button></div>

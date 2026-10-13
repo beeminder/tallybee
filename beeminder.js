@@ -107,24 +107,28 @@ function autoLogin(cleanUrl) {
   return true;
 }
 
-// The user's goals, most urgent first, as a list of Beeminder goal objects.
-// ("me" in these URLs is Beeminder's stand-in for the token's user, and
-// "emaciated" leaves out each goal's graph data, which TallyBee doesn't need.)
-async function getGoals() {
+// What Beeminder's API has at path (under API), with params, its reply as
+// check reads it, giving up after PATIENCE milliseconds. ("me" in these paths
+// is Beeminder's stand-in for the token's user.)
+async function get(path, params = {}) {
   const token = getToken();
-  return check(await fetch(`${API}users/me/goals.json?` +
-    new URLSearchParams({ access_token: token, emaciated: true }),
+  return check(await fetch(`${API}${path}?` +
+    new URLSearchParams({ access_token: token, ...params }),
     { signal: AbortSignal.timeout(PATIENCE) }), token);
+}
+
+// The user's goals, most urgent first, as a list of Beeminder goal objects.
+// ("emaciated" leaves out each goal's graph data, which TallyBee doesn't
+// need.)
+function getGoals() {
+  return get('users/me/goals.json', { emaciated: true });
 }
 
 // The user, as a Beeminder user object, like { username: 'alice', timezone:
 // 'America/New_York', ... }. The timezone is the one set on Beeminder, which,
 // with each goal's deadline, decides what day it is for the user's goals.
-async function getUser() {
-  const token = getToken();
-  return check(await fetch(`${API}users/me.json?` +
-    new URLSearchParams({ access_token: token }),
-    { signal: AbortSignal.timeout(PATIENCE) }), token);
+function getUser() {
+  return get('users/me.json');
 }
 
 // The datapoint added to the user's goal last, or undefined if it has none.
@@ -132,16 +136,15 @@ async function getUser() {
 // edited.) Beeminder sorts datapoints by when they were added unless told to
 // sort them some other way.
 async function getLastAdded(goal) {
-  const token = getToken();
-  return (await check(await fetch(`${API}users/me/goals/${goal}/datapoints.json?` +
-    new URLSearchParams({ access_token: token, count: 1 }),
-    { signal: AbortSignal.timeout(PATIENCE) }), token))[0];
+  return (await get(`users/me/goals/${goal}/datapoints.json`, { count: 1 }))[0];
 }
 
 // Add a datapoint to the user's goal, for the day with daystamp daystamp (like
 // 20261002), and return the datapoint as Beeminder saved it. The requestid
 // makes resending the datapoint update it in place rather than add a
-// duplicate.
+// duplicate. A resend that's the same in every way, as after a reply got lost,
+// Beeminder ignores, and, its API docs say, answers with "duplicate
+// datapoint" (in what form, they don't say), which shows like any error.
 async function addDatapoint(goal, value, daystamp, comment, requestid) {
   const token = getToken();
   const url = `${API}users/me/goals/${goal}/datapoints.json`;
