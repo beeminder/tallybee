@@ -135,6 +135,68 @@ body {
   text-box: trim-both cap alphabetic;
 }
 
+/* What only screen readers get (see #said in index.html): a box 1px across,
+   with nothing in it to see */
+#said { position: absolute; width: 1px; height: 1px; overflow: hidden;
+        clip-path: inset(50%); white-space: nowrap; }
+
+/* The banner that says that the goal's day is over (see index.html), as
+   beeminder.com's dashboard shows it (its #flash-js, with its notice look,
+   and its .bbtn button, in beeminder.com's stylesheet as of 2026-10-13): a
+   bar of purple across the top of the screen, at least 75px tall; its words
+   white, as big as 2% of the screen's width, between 16px and 28px; its × at
+   the left; and its button dark gray, with a gray glow, its word white, bold
+   and underlined, 13px. Unlike beeminder.com's, it takes the top of the
+   screen, pushing the stage down, rather than floating over it, so that the
+   top line and the menu button stay whole; its words are centered in the room
+   right of its ×, rather than on the screen, which on a small phone would
+   leave them too little room; and its × and button are 44px tall, like the
+   footer's controls. */
+#newday {
+  flex: none; /* never squeezed, below its 75px, to less than its words */
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  align-items: center;
+  column-gap: 8px;
+  min-height: 75px;
+  padding: 0 8px;
+  background-color: #a264d8;
+  color: white;
+  font-size: clamp(16px, 2vw, 28px);
+  line-height: 1.25;
+  text-align: center;
+}
+#newdayx {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  background-color: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+#newdayx svg { display: block; margin: auto; }
+#reload {
+  min-height: 44px;
+  margin: 8px;
+  padding: 0 15px;
+  border: 0;
+  border-radius: 2px;
+  background-color: #3b3b3b;
+  box-shadow: 0 0 3px #999;
+  color: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: bold;
+  line-height: 18px;
+  text-decoration: underline;
+  vertical-align: middle;
+  cursor: pointer;
+}
+@media (hover: hover) { #reload:hover { background-color: #4c4c4c; } }
+#reload:active { background-color: #5e5e5e; }
+#newday :focus-visible { outline-color: white; } /* the blue is too faint on purple */
+
 /* What's hidden stays hidden, even what gets a display of its own below */
 [hidden] { display: none !important; }
 
@@ -228,7 +290,7 @@ body {
    scroll padding keeps that room when the keyboard's focus scrolls a control
    into view. Where the footer gets squeezed, as with text at 200%, the drawer
    gives way, scrolling, after a message's lines past its first (see
-   #status). */
+   #msgline). */
 #drawer, #bar { display: flex; flex-wrap: wrap; }
 #drawer { gap: 12px 16px; overflow-y: auto; padding: 4px; margin: -4px -4px 8px;
           scroll-padding: 4px; }
@@ -257,22 +319,30 @@ body {
   white-space: nowrap;
 }
 
-/* The status line takes no room till it has something to say, and at most
-   the whole lines (of 1.25em) that fit in a tenth of the screen, scrolling
-   past that, so that even an error that's a whole web page leaves room to
-   tap, even folded with text at 200%: 4 lines on a phone 844px tall, 2 with
-   text at 200%. (A tenth of svh, the height of the page with any address bar
-   showing, which this page, never scrolling, always has; see body.) Where the
-   footer gets squeezed, as with text at 200%, a message's lines past its first
-   give way first, and then the drawer (see #drawer); its first line stays
-   whole, so that it can be read. The 2px at its bottom, which its margin
-   gives back, are room for letters that reach below their line, as in fonts
-   taller than the lines they're set in, like Noto Sans, so that a message that
-   fits has nothing to scroll, and no scroll bar. */
-#status { max-height: round(down, 10svh, 1.25em); overflow-y: auto;
-          overflow-wrap: anywhere; flex-shrink: 1000; }
-#status:not(:empty) { padding-bottom: 2px; margin-bottom: 10px;
-                      min-height: 1.25em; }
+/* The message line: the status line, and the × at the right end of its first
+   line, which takes the message away (see index.html), 24px across, the
+   smallest target WCAG 2.2 allows (at AA), so that a message takes little
+   more room than its words. It takes no room till there's something to say.
+   The status line shows at most the whole lines (of 1.25em) that fit in a
+   tenth of the screen, scrolling past that, so that even an error that's a
+   whole web page leaves room to tap, even folded with text at 200%: 4 lines
+   on a phone 844px tall, 2 with text at 200%. (A tenth of svh, the height of
+   the page with any address bar showing, which this page, never scrolling,
+   always has; see body.) Where the footer gets squeezed, as with text at
+   200%, a message's lines past its first give way first, and then the drawer
+   (see #drawer); its first line, and the ×, stay whole, so that it can be
+   read, and taken away. The 2px at its bottom, which the line's margin gives
+   back, are room for letters that reach below their line, as in fonts taller
+   than the lines they're set in, like Noto Sans, so that a message that fits
+   has nothing to scroll, and no scroll bar. */
+#msgline { display: flex; align-items: start; gap: 8px; flex-shrink: 1000;
+           min-height: max(1.25em, 24px); margin-bottom: 10px; }
+#msgline:has(> #status:empty) { display: none; }
+#status { flex: 1 1 0; min-width: 0; max-height: round(down, 10svh, 1.25em);
+          overflow-y: auto; overflow-wrap: anywhere; padding-bottom: 2px; }
+#dismiss { flex: none; min-width: 24px; min-height: 24px; width: 24px;
+           height: 24px; padding: 0; border-radius: 50%; }
+#dismiss svg { display: block; margin: auto; }
 #status[data-kind=busy] { color: var(--yellow); }
 #status[data-kind=ok]   { color: var(--green); }
 #status[data-kind=err]  { color: var(--red); }
@@ -305,12 +375,12 @@ body {
 
 /* The info line: logged out, the login button, as wide as its label, and
    then the last datapoint, in gray, in the room left, on one line, cut short
-   (…) if need be, as its comment can be long, like the one TallyBee sends, so
-   that a new one moves nothing; and one line tall even with no datapoint to
-   show, so that, logged in, with no login button, the controls below it stay
-   out of reach of a touch a little below the big button. Where the line is
-   too narrow for the login button's label, that label takes two lines, rather
-   than getting cut off. */
+   (…) if need be, as its comment can be long, so that a new one moves
+   nothing; and one line tall even with no datapoint to show, so that, logged
+   in, with no login button, the controls below it stay out of reach of a
+   touch a little below the big button. Where the line is too narrow for the
+   login button's label, that label takes two lines, rather than getting cut
+   off. */
 #infoline { min-height: 20px; column-gap: 12px; }
 #loginbut {
   flex: 0 1 auto;

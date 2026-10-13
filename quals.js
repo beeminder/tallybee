@@ -356,8 +356,25 @@ const taps = (page, n) => page.evaluate(n => {
 
 const count = async page => Number(await page.textContent('#bigbut'))
 // What TallyBee remembers (see load in script.js)
-const tallied = async page =>
-  JSON.parse(await page.evaluate(() => localStorage.getItem('tallybee')))
+// SPEC CHANGE (windows, 2026-10-13): what's the window's own, like the count,
+// is in its sessionStorage, and what all windows share, like the fold, in
+// localStorage, under tallybee-shared
+const tallied = page => page.evaluate(() => ({
+  ...JSON.parse(sessionStorage.getItem('tallybee')),
+  ...JSON.parse(localStorage.getItem('tallybee-shared')) }))
+// OLDER: TallyBee from before each window had its own count (2026-10-13)
+// kept all it remembered in localStorage, under tallybee, which is where
+// quals about what such a TallyBee left put what it remembered, t, before
+// TallyBee first opens, as options for the browser context (see qual), with
+// older(t). (Not by putting it there once TallyBee has opened, and loading
+// the page again: TallyBee takes up what it remembers only after the page's
+// load event, which page.goto waits for, as it first asks whether another
+// TallyBee window is open; see OPEN in script.js.)
+// SPEC CHANGE (windows, 2026-10-13): these quals put it there with
+// localStorage.setItem, and loaded the page again
+const older = t => ({ storageState: { cookies: [], origins: [{
+  origin: new URL(APP).origin,
+  localStorage: [{ name: 'tallybee', value: JSON.stringify(t) }] }] } })
 const stored = page => page.evaluate(() => localStorage.getItem('beeminder-token'))
 const disabled = (page, sel) => page.locator(sel).isDisabled()
 const posts = bee => bee.calls.filter(c => c.method === 'POST')
@@ -390,7 +407,10 @@ const status = (page, url) =>
 // The app manifest Chrome finds on the page: json, what it says, and parsed,
 // how Chrome reads it, with its URLs resolved and its fields' names in
 // camelCase, like startUrl (though Chrome leaves some out, like short_name)
+// (once script.js has given the page its manifest, which, since 2026-10-13, it
+// does after the page's load event, which page.goto waits for: see OLDER)
 async function appManifest(page) {
+  await page.locator('#manifest').waitFor({ state: 'attached' })
   const cdp = await page.context().newCDPSession(page)
   const { errors, data, manifest } = await cdp.send('Page.getAppManifest')
   assert.deepEqual(errors, [])
@@ -1065,12 +1085,9 @@ qual('UNDO is grayed out when there is nothing to undo', async page => {
 // had none): UNDO usable, with nothing to undo.
 qual('a count left by TallyBee from before UNDO still loads', async page => {
   await page.goto(APP)
-  await page.evaluate(() => localStorage.setItem('tallybee', JSON.stringify(
-    { count: 5, requestid: 'r-old', pin: null, slug: 'pushups' })))
-  await page.reload()
   await see(page, '#bigbut', '5')
   assert.ok(await disabled(page, '#undobut'))
-})
+}, older({ count: 5, requestid: 'r-old', pin: null, slug: 'pushups' })) // see OLDER
 
 // Replicata: what TallyBee remembers gets broken, like missing its requestid
 // (by a bug, say). Open TallyBee.
@@ -1079,14 +1096,12 @@ qual('a count left by TallyBee from before UNDO still loads', async page => {
 // quietly put in for the missing one.
 qual('a broken memory fails loudly, rather than getting quietly filled in', async (page, bee) => {
   await page.goto(APP)
-  await page.evaluate(() => localStorage.setItem('tallybee', JSON.stringify({ count: 3 })))
-  await page.reload()
   await see(page, '#status', /^Error: .*"count":3/)
   await expectError(page, bee, /"count":3/)
   // and the error from then showing the rest of the page, which can't be done
   // with script.js stopped partway
   await expectError(page, bee, /before initialization/)
-})
+}, older({ count: 3 })) // see OLDER
 
 // Replicata: tap 4 and Clear by mistake; the phone reloads the page before you
 // notice. Press UNDO.
@@ -1201,20 +1216,30 @@ qual('the count survives reloading the page', async page => {
 // on Android share storage). Tap 10 in one, then 1 in the other.
 // Expectata: 11, in both, and after reloading.
 // Resultata (before): each tab kept its own count and overwrote the other's.
-qual('two TallyBee windows share one count', async page => {
+// SPEC CHANGE (windows, 2026-10-13), and renamed from "two TallyBee windows share one
+// count": each window has its own count (decided with the person working on
+// this, after AGENTS.md N10: with one count for all windows, a tap in one
+// could vanish when another loaded the goals). So 10 in the one, and 1 in the
+// other, after reloading too; and a third window starts at 0.
+qual('each TallyBee window has its own count', async page => {
   await login(page)
   const w = await window2(page, APP)
   await see(w, '#goals', /pushups/)
   await page.bringToFront()
   await tap(page, '#bigbut', 10)
   await w.bringToFront()
-  await see(w, '#bigbut', '10')
+  await see(w, '#bigbut', '0')
   await tap(w, '#bigbut')
-  await see(w, '#bigbut', '11')
+  await see(w, '#bigbut', '1')
   await page.bringToFront()
-  await see(page, '#bigbut', '11')
+  await see(page, '#bigbut', '10')
   await page.reload()
-  await see(page, '#bigbut', '11')
+  await see(page, '#bigbut', '10')
+  await w.reload()
+  await see(w, '#bigbut', '1')
+  const w3 = await window2(page, APP)
+  await see(w3, '#goals', /pushups/)
+  await see(w3, '#bigbut', '0')
 })
 
 // Replicata: tap 12345 times.
@@ -1359,6 +1384,8 @@ qual('Submit says (∑) on goals that sum their datapoints, as on Beeminder', as
 // message saying that it worked.
 // Resultata (in a mutant that left the count after a Submit): 3, there to be
 // sent again.
+// SPEC CHANGE (via, 2026-10-13): no "via TallyBee at" and the time after
+// the comment (decided with the person working on this, AGENTS.md N7): no comment
 qual('Submit sends the count to the selected goal and zeroes the count', async (page, bee) => {
   await login(page)
   await tap(page, '#bigbut', 3)
@@ -1368,7 +1395,7 @@ qual('Submit sends the count to the selected goal and zeroes the count', async (
   assert.equal(p.path, 'users/alice/goals/pushups/datapoints.json')
   assert.equal(p.params.access_token, TOKEN)
   assert.equal(String(p.params.value), '3')
-  assert.match(p.params.comment, /^via TallyBee at \w{3} \w{3} \d\d \d{4} /)
+  assert.equal(p.params.comment, '')
   assert.ok(p.params.requestid)
   await see(page, '#status', /pushups/)
   assert.equal(await page.getAttribute('#status', 'data-kind'), 'ok')
@@ -1571,7 +1598,12 @@ qual('Submit sends the count from when it was tapped, even while waiting its tur
 // the other, before Beeminder replies, press Clear.
 // Expectata: the 3 go to Beeminder and the count ends at 0.
 // Resultata (before): -3, since the reply took 3 off the cleared count.
-qual('Clear in another window during a submission leaves the count at 0', async (page, bee) => {
+// SPEC CHANGE (windows, 2026-10-13), and renamed from "Clear in another window during a
+// submission leaves the count at 0": the other window has a count of its own
+// (see "each TallyBee window has its own count"), 2, tapped before its Clear,
+// which clears that, leaving the first window's 3 to go, and its UNDO brings
+// the 2 back
+qual('Clear in another window during a submission clears only its own count', async (page, bee) => {
   await login(page)
   const w = await window2(page, APP)
   await see(w, '#goals', /pushups/)
@@ -1582,6 +1614,7 @@ qual('Clear in another window during a submission leaves the count at 0', async 
   await tap(page, '#subbut')
   await calls(page, bee, 2 * LOAD + 1)
   await w.bringToFront()
+  await tap(w, '#bigbut', 2)
   await clear(w) // FINAL DESIGN
   open(null)
   await see(w, '#bigbut', '0')
@@ -1589,6 +1622,9 @@ qual('Clear in another window during a submission leaves the count at 0', async 
   await see(page, '#bigbut', '0')
   await see(page, '#status', /pushups/)
   assert.deepEqual(values(bee), ['3'])
+  await w.bringToFront()
+  await tap(w, '#undobut')
+  await see(w, '#bigbut', '2')
 })
 
 // Replicata: TallyBee in two windows on pushups. In one, tap 3 and Submit; in
@@ -1596,7 +1632,12 @@ qual('Clear in another window during a submission leaves the count at 0', async 
 // Expectata: the 3 go to Beeminder once, and the second window says it didn't
 // send them.
 // Resultata (before): the same 3 went twice, as two datapoints.
-qual('Submit in another window during a submission sends the taps only once', async (page, bee) => {
+// SPEC CHANGE (windows, 2026-10-13), and renamed from "Submit in another window during a
+// submission sends the taps only once": the other window has a count of its
+// own (see "each TallyBee window has its own count"), 2, tapped before its
+// Submit, which sends that, once the first window's 3 have gone: two
+// datapoints, each with a requestid of its own, and both windows at 0
+qual("Submit in another window during a submission sends that window's own count", async (page, bee) => {
   await login(page)
   const w = await window2(page, APP)
   await see(w, '#goals', /pushups/)
@@ -1607,13 +1648,17 @@ qual('Submit in another window during a submission sends the taps only once', as
   await tap(page, '#subbut')
   await calls(page, bee, 2 * LOAD + 1)
   await w.bringToFront()
-  await see(w, '#bigbut', '3')
+  await see(w, '#bigbut', '0')
+  await tap(w, '#bigbut', 2)
   await tap(w, '#subbut')
   open(null)
-  await see(w, '#status', /Error/)
-  await expectError(page, bee, /./)
+  await see(w, '#status', /✓/)
   await see(w, '#bigbut', '0')
-  assert.deepEqual(values(bee), ['3'])
+  await page.bringToFront()
+  await see(page, '#bigbut', '0')
+  assert.deepEqual(values(bee), ['3', '2'])
+  const [a, b] = posts(bee).map(p => p.params.requestid)
+  assert.notEqual(a, b)
 })
 
 // Replicata: Submit over a connection that never answers.
@@ -2026,6 +2071,8 @@ qual('UNDO undoes a typed number whole, not a keystroke', async page => {
 // Resultata (before): UNDO brought back the 3, the count as it was when the
 // field got the focus, before the first Submit got there, so the second
 // Submit sent the 3 again.
+// SPEC CHANGE (windows, 2026-10-13): the other window's count is its own (see "each
+// TallyBee window has its own count"), 0, not the 3, all along
 qual("UNDO of an edit can't bring back taps another window submitted meanwhile", async (page, bee) => {
   await login(page)
   const w = await window2(page, APP)
@@ -2037,7 +2084,7 @@ qual("UNDO of an edit can't bring back taps another window submitted meanwhile",
   await tap(page, '#subbut')
   await calls(page, bee, 2 * LOAD + 1)
   await w.bringToFront()
-  await see(w, '#bigbut', '3')
+  await see(w, '#bigbut', '0')
   await tap(w, '#num')
   open()
   await see(page, '#status', /pushups/)
@@ -2061,7 +2108,12 @@ qual("UNDO of an edit can't bring back taps another window submitted meanwhile",
 // 2 got typed, after the last Submit.
 // Resultata (before): UNDO grayed out, with nothing to undo: the edit had
 // given UNDO its way back at the 7, which the Submit then took away.
-qual('UNDO takes back what was typed after another window submitted mid-edit', async (page, bee) => {
+// SPEC CHANGE (windows, 2026-10-13), and renamed from "UNDO takes back what was typed
+// after another window submitted mid-edit": the other window's count is its
+// own (see "each TallyBee window has its own count"), so the first window's
+// Submit leaves its 7 as it is, and its edit whole: 72, and then UNDO takes
+// the whole edit back, to 0, the count as it was before it
+qual("another window's Submit leaves an edit under way whole, for UNDO", async (page, bee) => {
   await login(page)
   const w = await window2(page, APP)
   await see(w, '#goals', /pushups/)
@@ -2072,21 +2124,21 @@ qual('UNDO takes back what was typed after another window submitted mid-edit', a
   await tap(page, '#subbut')
   await calls(page, bee, 2 * LOAD + 1)
   await w.bringToFront()
-  await see(w, '#bigbut', '3')
+  await see(w, '#bigbut', '0')
   await tap(w, '#num')
   await w.keyboard.press('ControlOrMeta+A')
   await w.keyboard.type('7')
   await see(w, '#bigbut', '7')
   open()
   await see(page, '#status', /pushups/)
-  await see(w, '#num', '4')
+  await see(w, '#num', '7')
   await w.keyboard.press('End')
   await w.keyboard.type('2')
-  await see(w, '#bigbut', '42')
+  await see(w, '#bigbut', '72')
   await w.keyboard.press('Enter')
-  assert.ok(!await disabled(w, '#undobut'), 'UNDO, for the 2')
+  assert.ok(!await disabled(w, '#undobut'), 'UNDO, for the edit')
   await tap(w, '#undobut')
-  await see(w, '#bigbut', '4')
+  await see(w, '#bigbut', '0')
 })
 
 // Replicata: open TallyBee, logged out (or with no connection), tap 2, type 7
@@ -2539,6 +2591,9 @@ for (const [deadline, now, today] of [[-3600, '2026-10-03T03:30:00Z', ['20261003
 // as Beeminder's own form does: "set 1", then nothing; with no datapoint, as
 // when logged out, what it says logged out.
 // Resultata (before): what it says logged out, always.
+// SPEC CHANGE (placeholder, 2026-10-13): with no comment, as on pages, what it
+// says logged out, rather than nothing, an empty field with no label (decided
+// with the person working on this, AGENTS.md N19)
 qual("the comment field shows the last datapoint's comment, as on Beeminder", async page => {
   await page.goto(APP)
   const placeholder = () => page.getAttribute('#comment', 'placeholder')
@@ -2547,7 +2602,7 @@ qual("the comment field shows the last datapoint's comment, as on Beeminder", as
   await login(page)
   assert.equal(await placeholder(), 'set 1')
   await choose(page, 'pages')
-  assert.equal(await placeholder(), '')
+  assert.equal(await placeholder(), loggedout)
   await choose(page, 'newodo')
   assert.equal(await placeholder(), loggedout)
 })
@@ -2563,6 +2618,8 @@ qual("the comment field shows the last datapoint's comment, as on Beeminder", as
 // but Beeminder's own site shows a datapoint with no comment with no quotes:
 // see htmlForDatapoint in its app/javascript/goal.js, and the data-display of
 // its app/views/datapoints/_datapoint.html.erb.
+// SPEC CHANGE (via, 2026-10-13): no "via TallyBee at" and the time after
+// the comment (decided with the person working on this, AGENTS.md N7): 02 2 "x"
 qual('the last datapoint shows, as on Beeminder: its day, value and comment', async page => {
   await page.clock.setFixedTime(NOON)
   await login(page)
@@ -2575,21 +2632,22 @@ qual('the last datapoint shows, as on Beeminder: its day, value and comment', as
   await remark(page, 'x')
   await tap(page, '#bigbut', 2)
   await tap(page, '#subbut')
-  await see(page, '#lastdp', /^02 2 "x via TallyBee at .*"$/)
+  await see(page, '#lastdp', '02 2 "x"')
 })
 
 // Replicata: log in, type a comment, tap 3, and Submit.
 // Expectata: the datapoint's comment is what you typed, then "via TallyBee
 // at" and the time.
 // Resultata (before): no way to add a comment.
+// SPEC CHANGE (via, 2026-10-13): no "via TallyBee at" and the time after
+// the comment (decided with the person working on this, AGENTS.md N7): just what you typed
 qual('a comment typed before Submit goes with the datapoint', async (page, bee) => {
   await login(page)
   await remark(page, 'felt strong')
   await tap(page, '#bigbut', 3)
   await tap(page, '#subbut')
   await see(page, '#bigbut', '0')
-  assert.match(posts(bee)[0].params.comment,
-               /^felt strong via TallyBee at \w{3} \w{3} \d\d \d{4} /)
+  assert.equal(posts(bee)[0].params.comment, 'felt strong')
 })
 
 // Replicata: tap 1 and Submit, with no comment; then type a comment with
@@ -2599,10 +2657,12 @@ qual('a comment typed before Submit goes with the datapoint', async (page, bee) 
 // comment as typed, spaces and all, a space, and then that.
 // Resultata (in the prototypes of this round, which trimmed the whole): the
 // spaces at the start of the comment were cut.
-qual('Beeminder gets the comment exactly as typed, and with none, exactly what it got before', async (page, bee) => {
-  await page.clock.setFixedTime(new Date('2026-09-30T12:34:56Z'))
+// SPEC CHANGE (via, 2026-10-13): no "via TallyBee at" and the time after
+// the comment (decided with the person working on this, AGENTS.md N7), and renamed from "Beeminder gets the comment exactly as typed, and
+// with none, exactly what it got before": the first datapoint's comment is
+// empty, and the second's is the comment as typed, spaces and all
+qual('Beeminder gets the comment exactly as typed, and with none, none', async (page, bee) => {
   await login(page)
-  const via = 'via TallyBee at ' + await page.evaluate(() => String(new Date()))
   await tap(page, '#bigbut')
   await tap(page, '#subbut')
   await see(page, '#bigbut', '0')
@@ -2610,7 +2670,7 @@ qual('Beeminder gets the comment exactly as typed, and with none, exactly what i
   await tap(page, '#bigbut')
   await tap(page, '#subbut')
   await see(page, '#bigbut', '0')
-  assert.deepEqual(posts(bee).map(p => p.params.comment), [via, `  set 2  ${via}`])
+  assert.deepEqual(posts(bee).map(p => p.params.comment), ['', '  set 2 '])
 })
 
 // Replicata: type a comment, without pressing Enter, and the phone reloads
@@ -2620,7 +2680,11 @@ qual('Beeminder gets the comment exactly as typed, and with none, exactly what i
 // and the other window's change in both.
 // Resultata (in a mutant that saved the comment only when its field was left):
 // no comment after the reload.
-qual('the comment survives reloading, and all TallyBee windows share it', async page => {
+// SPEC CHANGE (windows, 2026-10-13), and renamed from "the comment survives reloading, and
+// all TallyBee windows share it": each window has its own (see "each TallyBee
+// window has its own count"), so none in the other window, and its comment
+// there only
+qual('the comment survives reloading, and each TallyBee window has its own', async page => {
   await login(page)
   await tap(page, '#comment')
   await page.keyboard.type('set 1')
@@ -2629,11 +2693,13 @@ qual('the comment survives reloading, and all TallyBee windows share it', async 
   await see(page, '#comment', 'set 1')
   const w = await window2(page, APP)
   await see(w, '#goals', /pushups/)
-  await see(w, '#comment', 'set 1')
+  await see(w, '#comment', '')
   await w.bringToFront()
   await remark(w, 'set 2')
   await page.bringToFront()
-  await see(page, '#comment', 'set 2')
+  await page.reload()
+  await see(page, '#goals', /pushups/)
+  await see(page, '#comment', 'set 1')
 })
 
 // Replicata: type a comment, tap 3, and Submit; then type another comment, tap
@@ -2644,6 +2710,8 @@ qual('the comment survives reloading, and all TallyBee windows share it', async 
 // "set 1" still there after the Submit.
 // SPEC CHANGE (following from the owner's answer to question 9 in AGENTS.md,
 // that Clear be grayed out at 0): a tap before the Clear.
+// SPEC CHANGE (via, 2026-10-13): no "via TallyBee at" and the time after
+// the comment (decided with the person working on this, AGENTS.md N7): an empty comment
 qual('Submit and Clear start the next datapoint with no comment', async (page, bee) => {
   await login(page)
   await remark(page, 'set 1')
@@ -2658,7 +2726,7 @@ qual('Submit and Clear start the next datapoint with no comment', async (page, b
   await tap(page, '#bigbut', 2)
   await tap(page, '#subbut')
   await see(page, '#bigbut', '0')
-  assert.match(posts(bee)[1].params.comment, /^via TallyBee at /)
+  assert.equal(posts(bee)[1].params.comment, '')
 })
 
 // Replicata: type a comment and tap 3, then press Clear by mistake. Press
@@ -2767,6 +2835,8 @@ qual('UNDO of a comment edit puts back the comment, and only the comment', async
 // typed, "set 1" having gone with the datapoint.
 // Resultata (before): "set 1" back, as the comment was when the field got the
 // focus, before the Submit got there, to go with the next datapoint too.
+// SPEC CHANGE (windows, 2026-10-13): the other window's comment is its own (see "each
+// TallyBee window has its own count"), none, not "set 1", all along
 qual("UNDO of an edit can't bring back a comment another window submitted meanwhile", async (page, bee) => {
   await login(page)
   const w = await window2(page, APP)
@@ -2779,7 +2849,7 @@ qual("UNDO of an edit can't bring back a comment another window submitted meanwh
   await tap(page, '#subbut')
   await calls(page, bee, 2 * LOAD + 1)
   await w.bringToFront()
-  await see(w, '#comment', 'set 1')
+  await see(w, '#comment', '')
   await tap(w, '#comment')
   open()
   await see(page, '#status', /pushups/)
@@ -2840,17 +2910,14 @@ qual('a touch on the big button, even with nose and chin at once, ends an edit o
 // nothing in TallyBee working, since what UNDO would put back had no comment.
 qual('what TallyBee remembered before there were comments still works, UNDO and all', async page => {
   await page.goto(APP)
-  await page.evaluate(() => localStorage.setItem('tallybee', JSON.stringify({
-    count: 3, requestid: 'r1', pin: null,
-    prev: { count: 2, requestid: 'r1', pin: null }, slug: 'pushups' })))
-  await page.reload()
   await see(page, '#bigbut', '3')
   await see(page, '#comment', '')
   assert.ok(await unfolded(page))
   await tap(page, '#undobut')
   await see(page, '#bigbut', '2')
   await see(page, '#comment', '')
-})
+}, older({ count: 3, requestid: 'r1', pin: null, // see OLDER
+           prev: { count: 2, requestid: 'r1', pin: null }, slug: 'pushups' }))
 
 // Replicata: with the TallyBee of ce83b01, whose prev holds only what the
 // last change changed (for a tap, just the count), and no comment, tap 3.
@@ -2861,16 +2928,14 @@ qual('what TallyBee remembered before there were comments still works, UNDO and 
 // error at once, and the remembered 3 not shown.
 qual('what TallyBee remembered as a prev of just the count still works', async page => {
   await page.goto(APP)
-  await page.evaluate(() => localStorage.setItem('tallybee', JSON.stringify({
-    count: 3, requestid: 'r1', pin: null, prev: { count: 2 }, slug: 'pushups' })))
-  await page.reload()
   await see(page, '#bigbut', '3')
   await see(page, '#comment', '')
   assert.ok(await unfolded(page))
   await tap(page, '#undobut')
   await see(page, '#bigbut', '2')
   await see(page, '#comment', '')
-})
+}, older({ count: 3, requestid: 'r1', pin: null, prev: { count: 2 }, // see OLDER
+           slug: 'pushups' }))
 
 // Replicata: TallyBee from before UNDO (2369030), which remembered no prev,
 // comment, or fold, left a count of 5. Open this TallyBee, and edit the
@@ -2881,9 +2946,6 @@ qual('what TallyBee remembered as a prev of just the count still works', async p
 // had none): an error at once, and the remembered 5 not shown.
 qual('what TallyBee remembered before UNDO gets no comment, and is unfolded', async page => {
   await page.goto(APP)
-  await page.evaluate(() => localStorage.setItem('tallybee', JSON.stringify(
-    { count: 5, requestid: 'r-old', pin: null, slug: 'pushups' })))
-  await page.reload()
   await see(page, '#bigbut', '5')
   await see(page, '#comment', '')
   assert.ok(await unfolded(page))
@@ -2891,7 +2953,7 @@ qual('what TallyBee remembered before UNDO gets no comment, and is unfolded', as
   await tap(page, '#undobut')
   await see(page, '#comment', '')
   assert.equal(await count(page), 5)
-})
+}, older({ count: 5, requestid: 'r-old', pin: null, slug: 'pushups' })) // see OLDER
 
 // Replicata: what TallyBee remembers gets broken (by a bug, say): its comment
 // isn't text, or whether the footer is folded isn't true or false, or what
@@ -2903,16 +2965,13 @@ for (const [what, broken] of [['comment', { comment: 5 }], ['fold', { folded: 'y
                               ["UNDO's count", { prev: undefined, undos: [{ count: 'two' }] }]])
   qual(`a broken memory of the ${what} fails loudly`, async (page, bee) => {
     await page.goto(APP)
-    await page.evaluate(b => localStorage.setItem('tallybee', JSON.stringify({
-      count: 3, requestid: 'r1', pin: null, comment: '', prev: null, slug: null,
-      folded: false, ...b })), broken)
-    await page.reload()
     await see(page, '#status', /^Error: .*"count":3/)
     await expectError(page, bee, /"count":3/)
     // and the error from then showing the rest of the page, which can't be
     // done with script.js stopped partway
     await expectError(page, bee, /before initialization/)
-  })
+  }, older({ count: 3, requestid: 'r1', pin: null, comment: '', prev: null, // see OLDER
+              slug: null, folded: false, ...broken }))
 
 // Replicata: something puts text in the comment field without its ever
 // getting the focus (like a browser extension filling it in).
@@ -2927,8 +2986,7 @@ qual('an edit of the comment with no start fails loudly, changing nothing', asyn
   })
   await see(page, '#status', /^Error: .*before/)
   await expectError(page, bee, /before/)
-  assert.equal(JSON.parse(await page.evaluate(() =>
-    localStorage.getItem('tallybee'))).comment, '')
+  assert.equal((await tallied(page)).comment, '')
 })
 
 // Replicata: edit the comment to "a" (tap the field, type, press Enter); then
@@ -2946,8 +3004,7 @@ qual('an edit of the comment with no start fails loudly, even after an earlier e
   })
   await see(page, '#status', /^Error: .*before/)
   await expectError(page, bee, /before/)
-  assert.equal(JSON.parse(await page.evaluate(() =>
-    localStorage.getItem('tallybee'))).comment, 'a')
+  assert.equal((await tallied(page)).comment, 'a')
 })
 
 // Replicata: tap once, and press UNDO; then something puts text in the
@@ -2967,8 +3024,7 @@ qual('an edit of the comment with no start fails loudly, even after an UNDO', as
   })
   await see(page, '#status', /^Error: .*before/)
   await expectError(page, bee, /before/)
-  assert.equal(JSON.parse(await page.evaluate(() =>
-    localStorage.getItem('tallybee'))).comment, '')
+  assert.equal((await tallied(page)).comment, '')
 })
 
 // Replicata: tap 3 and Submit, with Beeminder slow to answer, and look at the
@@ -2997,6 +3053,10 @@ qual('the comment field is grayed out while Beeminder takes the datapoint', asyn
 // Expectata: "first" goes: the comment as it was when Submit was pressed.
 // Resultata (in a mutant that read the comment when the Submit's turn came):
 // "second" went.
+// SPEC CHANGE (windows, 2026-10-13): the other window's comment is its own (see "each
+// TallyBee window has its own count"), so this window's stays "first"
+// SPEC CHANGE (via, 2026-10-13): no "via TallyBee at" and the time after
+// the comment (decided with the person working on this, AGENTS.md N7): just "first"
 qual('Submit sends the comment as it was when pressed, even while waiting its turn', async (page, bee) => {
   await login(page)
   await remark(page, 'first')
@@ -3010,10 +3070,10 @@ qual('Submit sends the comment as it was when pressed, even while waiting its tu
   await w.bringToFront()
   await remark(w, 'second')
   await page.bringToFront()
-  await see(page, '#comment', 'second')
+  await see(page, '#comment', 'first')
   open()
   await see(page, '#bigbut', '0')
-  assert.match(posts(bee)[0].params.comment, /^first via TallyBee at /)
+  assert.equal(posts(bee)[0].params.comment, 'first')
 })
 
 // Replicata: on a phone, type a comment, and press the keyboard's done key.
@@ -3086,8 +3146,7 @@ qual('a keyboard that types a word at a time gets the comment right', async page
   }
   assert.equal(await page.inputValue('#comment'), 'hello world')
   assert.equal(await page.evaluate(() => window.starts), 2)
-  assert.equal(await page.evaluate(() =>
-    JSON.parse(localStorage.getItem('tallybee')).comment), 'hello world')
+  assert.equal((await tallied(page)).comment, 'hello world')
 })
 
 // Replicata: on a computer, click the comment field, type "a b", and press
@@ -3128,8 +3187,7 @@ qual('a comment typed after tabbing to its field is saved, and undoable', async 
   await page.keyboard.type('abc')
   await page.keyboard.press('Enter')
   await see(page, '#comment', 'abc')
-  assert.equal(JSON.parse(await page.evaluate(() =>
-    localStorage.getItem('tallybee'))).comment, 'abc')
+  assert.equal((await tallied(page)).comment, 'abc')
   await page.click('#undobut')
   await see(page, '#comment', '')
 }, DESK)
@@ -3642,6 +3700,10 @@ test('Chrome has no complaint about TallyBee as an app', async () => {
     await localhost(async url => {
       const page = await context.newPage()
       await page.goto(url + '?goal=pages')
+      // once script.js has given the page its manifest, which, since 2026-10-13,
+      // it does after the page's load event, which page.goto waits for (see
+      // OLDER)
+      await page.locator('#manifest').waitFor({ state: 'attached' })
       const cdp = await context.newCDPSession(page)
       const { installabilityErrors } = await cdp.send('Page.getInstallabilityErrors')
       assert.deepEqual(installabilityErrors.map(e => e.errorId), [])
@@ -3892,6 +3954,7 @@ test('a 404 while TallyBee is being published leaves its offline copy alone', as
 // that icon not the size it said.
 qual("the app manifest: TallyBee, standalone, black, with icons that exist", async page => {
   await page.goto(APP)
+  await page.locator('#manifest').waitFor({ state: 'attached' }) // see appManifest
   const cdp = await page.context().newCDPSession(page)
   const { url, errors, data } = await cdp.send('Page.getAppManifest')
   assert.deepEqual(errors, [])
@@ -3921,6 +3984,7 @@ qual("the app manifest: TallyBee, standalone, black, with icons that exist", asy
 // lot of empty space around them.
 qual("Android's icon: big tally marks, the disclosure, nothing outside the middle 80%", async page => {
   await page.goto(APP)
+  await page.locator('#manifest').waitFor({ state: 'attached' }) // see appManifest
   const cdp = await page.context().newCDPSession(page)
   const { url, data } = await cdp.send('Page.getAppManifest')
   const icon = JSON.parse(data).icons.find(i => i.purpose === 'maskable')
@@ -4299,8 +4363,10 @@ qual('folding and unfolding moves nothing in the bar, at any width', async page 
 // the menu), is what shows that the footer is unfolded at first
 qual('the fold is remembered, and shared by all TallyBee windows', async page => {
   await page.goto(APP)
-  const folded = async p => JSON.parse(await p.evaluate(() =>
-    localStorage.getItem('tallybee'))).folded
+  // SPEC CHANGE (windows, 2026-10-13): see tallied; and once TallyBee has
+  // started (see OLDER)
+  const folded = async p => (await tallied(p)).folded
+  await see(page, '#bigbut', '0')
   assert.ok(await page.isVisible('#comment'), 'unfolded at first')
   assert.equal(await folded(page), false)
   await login(page)
@@ -5859,3 +5925,486 @@ for (const [width, height] of [[390, 844], [320, 568], [280, 653], [844, 390], [
                  JSON.stringify(lines))
     for (const r of lines) assert.ok(r.right <= m.x - 8, JSON.stringify({ r, m }))
   }, { viewport: { width, height } })
+
+// -------------------------------------------- dismissing messages (2026-10-13)
+
+// Replicata: tap 3 and Submit; tap the × at the end of the message that it
+// worked. Then tap 2 and Submit over a connection that fails, and tap the × at
+// the end of the error.
+// Expectata: each message with an × at its end, a button with a name for
+// screen readers; each × takes its message away, and the status line with
+// it, leaving the big button as tall as before there was any message, and
+// the count, 2 after the failed Submit, as it was; and the next message shows,
+// × and all.
+// Resultata (before): no ×: a message stayed till the next one.
+qual('an × at the end of a message takes it away', async (page, bee) => {
+  await login(page)
+  const big = await box(page, '#bigbut')
+  assert.ok(!await page.isVisible('#dismiss'), 'no message, no ×')
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  await see(page, '#status', /✓.*pushups/)
+  const name = await page.getAttribute('#dismiss', 'aria-label') ?? ''
+  assert.match(name, /^\p{L}{2,}/u)
+  assert.equal(await page.getByRole('button', { name, exact: true }).count(), 1)
+  await tap(page, '#dismiss')
+  await see(page, '#status', '')
+  assert.ok(!await page.isVisible('#dismiss'))
+  assert.deepEqual(await box(page, '#bigbut'), big)
+  bee.reply = c => c.method === 'POST' ? 'abort' : null
+  await tap(page, '#bigbut', 2)
+  await tap(page, '#subbut')
+  await see(page, '#status', /Error/)
+  await expectError(page, bee, /fetch/i)
+  await tap(page, '#dismiss')
+  await see(page, '#status', '')
+  assert.deepEqual(await box(page, '#bigbut'), big)
+  assert.equal(await count(page), 2)
+})
+
+// Replicata: on phones big and small, upright and sideways, and with text at
+// 200%, Submit when Beeminder is down, with a long error page; scroll the
+// error. Then, connected again, Submit, and look at the message that it
+// worked.
+// Expectata: the × at the right end of the message's first line, where the
+// footer's controls end, 24px across (the smallest target WCAG 2.2 allows, at
+// AA), with no word of the message under it, and staying put as the rest of
+// the error scrolls by.
+// Resultata (before): no ×.
+for (const [width, height] of [[390, 844], [320, 568], [844, 390], [200, 433]])
+  qual(`the × sits at the end of the message's first line (${width}x${height})`, async (page, bee) => {
+    await login(page)
+    const look = async () => {
+      const x = await box(page, '#dismiss')
+      const s = await box(page, '#status')
+      const right = (await box(page, '#foldbut')).x + 44
+      assert.ok(x.width === 24 && x.height === 24 && x.x + x.width === right &&
+                x.y === s.y, JSON.stringify({ x, s, right }))
+      // Each line of the message's words, as drawn, clear of the ×
+      const lines = await page.$eval('#status', e => {
+        const r = document.createRange()
+        r.selectNodeContents(e)
+        return [...r.getClientRects()].map(l => l.toJSON())
+      })
+      for (const l of lines) assert.ok(l.right <= x.x, JSON.stringify({ l, x }))
+      return x
+    }
+    bee.reply = c => c.method === 'POST'
+      ? [502, { errors: 'Bad gateway. '.repeat(50) }] : null
+    await tap(page, '#bigbut', 3)
+    await tap(page, '#subbut')
+    await see(page, '#status', /502/)
+    await expectError(page, bee, /502/)
+    const x = await look()
+    assert.ok(await page.$eval('#status', s => { s.scrollTop = 40
+                                                 return s.scrollTop > 0 }))
+    assert.deepEqual(await box(page, '#dismiss'), x)
+    bee.reply = () => null
+    await tap(page, '#subbut')
+    await see(page, '#status', /✓.*pushups/)
+    await look()
+  }, { viewport: { width, height } })
+
+// ------------------------------------------------------ a new day (2026-10-13)
+
+// The page's clock just before, and just after, the end of 2026-10-02 for
+// alice's goals, whose days end at midnight in New York, her timezone (see
+// NOON)
+const BEFORE = new Date('2026-10-03T03:59:50Z')
+const AFTER = new Date('2026-10-03T04:00:05Z')
+
+// Replicata: just before midnight in New York (alice's timezone on Beeminder,
+// though her phone is set to Tokyo's), tap 3, and leave TallyBee on the
+// screen, untouched, till just after midnight. Then press the banner's
+// button.
+// Expectata: once the goal's day is over, within a second or so, a banner,
+// as on beeminder.com, saying so in words, with a button, called by a word,
+// that loads the page again; and nothing else changed: the count still 3, the
+// day still the 2nd. The button loads the page again, with the goals loaded
+// again, the count still 3, the day the 3rd, and no banner.
+// Resultata (before): no banner: the day dropdown said "Today (2nd)" while
+// Submit sent the datapoint for the 3rd (AGENTS.md N3, README open question
+// 7).
+qual("a banner says when the goal's day is over, with a button to reload", async (page, bee) => {
+  await page.clock.setFixedTime(BEFORE)
+  await login(page)
+  await tap(page, '#bigbut', 3)
+  await page.waitForTimeout(1500)
+  assert.ok(!await page.isVisible('#newday'), 'no banner yet')
+  await page.clock.setFixedTime(AFTER)
+  await page.locator('#newday').waitFor({ timeout: 2000 })
+  // (beeminder.com's words: see "the banner looks like beeminder.com's")
+  assert.equal((await page.textContent('#newday')).trim(),
+               'A new day has dawned – Refresh Page')
+  assert.equal(await count(page), 3)
+  assert.equal(await page.inputValue('#day'), '20261002')
+  const n = bee.calls.length
+  await Promise.all([page.waitForEvent('load'), tap(page, '#reload')])
+  await calls(page, bee, n + LOAD)
+  await see(page, '#bigbut', '3')
+  assert.equal(await page.inputValue('#day'), '20261003')
+  await page.waitForTimeout(1500)
+  assert.ok(!await page.isVisible('#newday'), 'no banner after the reload')
+}, TOKYO)
+
+// Replicata: just before midnight in New York, open TallyBee; after
+// midnight, with it still open, tap 3, switch away from TallyBee and back
+// (which loads the goals again), and Submit. Then press the banner's button,
+// tap 2, and Submit again.
+// Expectata: till the page loads again, the days as they were when it
+// loaded, "Today (2nd)" first, the banner still showing, and the datapoint
+// for the 2nd, the day the dropdown showed; once it loads again, "Today
+// (3rd)", and the next datapoint for the 3rd.
+// Resultata (before): "Today (3rd)" once the tap redrew the page, and Submit
+// sent the datapoint for the 3rd even while the dropdown said the 2nd
+// (AGENTS.md N3).
+qual("the days, and the day Submit sends, stay as the page loaded them till it loads again", async (page, bee) => {
+  await page.clock.setFixedTime(BEFORE)
+  await login(page)
+  await page.clock.setFixedTime(AFTER)
+  await page.locator('#newday').waitFor({ timeout: 2000 })
+  await tap(page, '#bigbut', 3)
+  await comeback(page)
+  await calls(page, bee, 2 * LOAD)
+  assert.deepEqual((await days(page))[0], ['20261002', 'Today (2nd)'])
+  assert.equal(await page.inputValue('#day'), '20261002')
+  await page.waitForTimeout(1500)
+  assert.ok(await page.isVisible('#newday'), 'the banner, still')
+  await tap(page, '#subbut')
+  await see(page, '#status', /✓/)
+  await Promise.all([page.waitForEvent('load'), tap(page, '#reload')])
+  await see(page, '#goals', /pushups/)
+  assert.deepEqual((await days(page))[0], ['20261003', 'Today (3rd)'])
+  await tap(page, '#bigbut', 2)
+  await tap(page, '#subbut')
+  await settled(page)
+  assert.deepEqual(posts(bee).map(p => p.params.daystamp), ['20261002', '20261003'])
+}, TOKYO)
+
+// Replicata: on a goal whose day ends at 3am (a deadline 3 hours after
+// midnight), open TallyBee just before midnight in New York, and leave it
+// open till just after midnight, and then till just after 3am.
+// Expectata: no banner at midnight, the goal's day not being over yet, as
+// Beeminder counts days; the banner just after 3am.
+// Resultata (before): no banner.
+qual("the banner waits for the goal's own deadline", async (page, bee) => {
+  bee.goals[0].deadline = 3 * 3600
+  await page.clock.setFixedTime(BEFORE)
+  await login(page)
+  await page.clock.setFixedTime(AFTER)
+  await page.waitForTimeout(1500)
+  assert.ok(!await page.isVisible('#newday'), 'no banner at midnight')
+  await page.clock.setFixedTime(new Date('2026-10-03T07:00:05Z'))
+  await page.locator('#newday').waitFor({ timeout: 2000 })
+}, TOKYO)
+
+// Replicata: on phones upright and sideways, and with text at 200%, folded
+// and not, leave TallyBee open past the goal's deadline, with a message
+// showing (from a Submit).
+// Expectata: the banner at the top of the footer, above the message, wholly
+// on the screen; its button as tall as the footer's other controls, 44px; no
+// button of the bar moved by it; and a fifth of the screen, at least, still
+// for tapping.
+// Resultata (before): no banner.
+// SPEC CHANGE (banner, 2026-10-13): the banner at the very top of the screen,
+// as on beeminder.com (see "the banner looks like beeminder.com's"), with
+// the black area under it, rather than in the footer: the top line, and the
+// menu button, wholly below it, still where they were on the black; its ×,
+// too, 44px
+for (const [width, height] of [[390, 844], [844, 390], [200, 433]])
+  for (const fold of [false, true])
+    qual(`the banner moves no button, and leaves room to tap (${width}x${height}${fold ? ', folded' : ''})`, async page => {
+      await page.clock.setFixedTime(BEFORE)
+      await login(page)
+      if (fold) await tap(page, '#foldbut')
+      await tap(page, '#subbut')
+      await see(page, '#status', /✓/)
+      const bar = await box(page, '#foldbut')
+      await page.clock.setFixedTime(AFTER)
+      await page.locator('#newday').waitFor({ timeout: 2000 })
+      const b = await box(page, '#newday'), r = await box(page, '#reload')
+      const x = await box(page, '#newdayx'), stage = await box(page, '#stage')
+      assert.ok(b.y === 0 && b.width === width && stage.y === b.height &&
+                r.height === 44 && x.width === 44 && x.height === 44 &&
+                r.y + r.height <= b.height && x.y + x.height <= b.height,
+                JSON.stringify({ b, r, x, stage }))
+      const m = await box(page, '#menubut'), t = await box(page, '#topline')
+      assert.ok(m.y === stage.y + 16 && m.x + m.width === width - 16 && t.y === stage.y,
+                JSON.stringify({ m, t, stage }))
+      assert.deepEqual(await box(page, '#foldbut'), bar)
+      assert.ok((await box(page, '#bigbut')).height >= height / 5 - 0.5)
+    }, { ...TOKYO, viewport: { width, height } })
+
+// Replicata: leave TallyBee open past the goal's deadline, and look at the
+// banner; then press its ×, and wait.
+// Expectata: the banner as beeminder.com's (the one that its dashboard shows
+// then, #flash-js, with its notice look, from beeminder.com's stylesheet as
+// of 2026-10-13): a bar of purple, #a264d8, its words in white, "A new day has
+// dawned – " and then its button, "Refresh Page", dark gray, #3b3b3b, in white
+// letters, bold and underlined; and its × at the left, called Close. The ×
+// takes the banner away, for good, till the page loads again.
+// Resultata (before): the banner's words in Latin, in yellow, in the footer,
+// with no ×.
+qual("the banner looks like beeminder.com's, and its × takes it away", async page => {
+  await page.clock.setFixedTime(BEFORE)
+  await login(page)
+  await page.clock.setFixedTime(AFTER)
+  await page.locator('#newday').waitFor({ timeout: 2000 })
+  const look = sel => page.$eval(sel, e => {
+    const s = getComputedStyle(e)
+    return [s.backgroundColor, s.color, s.fontWeight, s.textDecorationLine]
+  })
+  const [bg, color] = await look('#newday')
+  assert.deepEqual([bg, color], ['rgb(162, 100, 216)', 'rgb(255, 255, 255)'])
+  assert.deepEqual(await look('#reload'),
+                   ['rgb(59, 59, 59)', 'rgb(255, 255, 255)', '700', 'underline'])
+  assert.equal(await page.textContent('#reload'), 'Refresh Page')
+  assert.equal(await page.getAttribute('#newdayx', 'aria-label'), 'Close')
+  assert.ok((await box(page, '#newdayx')).x < (await box(page, '#reload')).x)
+  await tap(page, '#newdayx')
+  await page.locator('#newday').waitFor({ state: 'hidden', timeout: 2000 })
+  await page.waitForTimeout(1500)
+  assert.ok(!await page.isVisible('#newday'), 'still gone')
+}, TOKYO)
+
+// ------------------------------------- keyboards and screen readers (2026-10-13)
+
+// Whether the big button has the keyboard's focus, with its ring showing
+const ringed = page => page.evaluate(() => document.activeElement.id === 'bigbut' &&
+                                           document.activeElement.matches(':focus-visible'))
+
+// Replicata: on a computer, with the keyboard alone: count 3 with Space; go
+// to UNDO and press it till there's nothing left to undo, then press Space.
+// Go to Clear and press it, then Space. Go to Submit and press it, then
+// Space. Go to the × on the message that it worked and press it, then Space.
+// Expectata: each time, the control, grayed out (or, the ×, gone), hands the
+// keyboard's focus to the big button, ring and all, so that the Space after
+// it counts: 1, then 1, then 1 more after the 1 sent, then 2.
+// Resultata (before): the focus dropped onto nothing, so Space counted
+// nothing (AGENTS.md N13).
+qual('a control grayed out or gone under the keyboard hands the focus to the big button', async (page, bee) => {
+  await login(page)
+  const press = async (sel, n = 1) => {
+    await page.focus(sel)
+    for (let i = 0; i < n; i++) await page.keyboard.press('Enter')
+  }
+  for (let i = 0; i < 3; i++) await page.keyboard.press('Space')
+  await see(page, '#bigbut', '3')
+  await press('#undobut', 3)
+  await see(page, '#bigbut', '0')
+  assert.ok(await ringed(page), 'after UNDO')
+  await page.keyboard.press('Space')
+  await see(page, '#bigbut', '1')
+  await press('#clearbut')
+  await see(page, '#bigbut', '0')
+  assert.ok(await ringed(page), 'after Clear')
+  await page.keyboard.press('Space')
+  await see(page, '#bigbut', '1')
+  await press('#subbut')
+  assert.ok(await ringed(page), 'after Submit')
+  await page.keyboard.press('Space')
+  await see(page, '#status', /✓/)
+  await see(page, '#bigbut', '1')
+  await press('#dismiss')
+  await see(page, '#status', '')
+  assert.ok(await ringed(page), 'after the ×')
+  await page.keyboard.press('Space')
+  await see(page, '#bigbut', '2')
+}, DESK)
+
+// Replicata: with a screen reader, tap 3, then press −1, UNDO, and Clear.
+// Expectata: after each, the screen reader hears the count, 2, then 3, then
+// 0, from a polite live region (one that waits for the screen reader to be
+// done speaking) that takes no room on the screen.
+// Resultata (before): nothing heard, the focus being on the button pressed,
+// not on the count (AGENTS.md N13).
+qual('screen readers hear the count after −1, UNDO and Clear', async page => {
+  await login(page)
+  assert.equal(await page.getAttribute('#said', 'aria-live'), 'polite')
+  const b = await box(page, '#said')
+  assert.ok(b.width <= 1 && b.height <= 1, JSON.stringify(b))
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#minusbut')
+  await see(page, '#said', '2')
+  await tap(page, '#undobut')
+  await see(page, '#said', '3')
+  await clear(page)
+  await see(page, '#said', '0')
+})
+
+// ---------------------------------------------- windows of their own (2026-10-13)
+
+// Replicata: TallyBee in two windows. Tap 3 in one; in the other, tap 2,
+// pick yesterday, and press UNDO twice.
+// Expectata: the other window's UNDO takes back its own changes, the pick of
+// the day and then a tap: today again, and 1; the first window still at 3,
+// for today, with its taps still there to undo.
+// Resultata (before): one count, day and UNDO for both windows: the first at
+// 4 after the other's UNDOs.
+qual('each TallyBee window has its own day and UNDO', async page => {
+  await page.clock.setFixedTime(NOON)
+  await login(page)
+  const w = await window2(page, APP)
+  await see(w, '#goals', /pushups/)
+  await page.bringToFront()
+  await tap(page, '#bigbut', 3)
+  await w.bringToFront()
+  await tap(w, '#bigbut', 2)
+  await w.selectOption('#day', '20261001')
+  await tap(w, '#undobut')
+  assert.ok(await till(w, async () => await w.inputValue('#day') === '20261002'),
+            'UNDO takes back the pick of the day')
+  await see(w, '#bigbut', '2')
+  await tap(w, '#undobut')
+  await see(w, '#bigbut', '1')
+  await page.bringToFront()
+  await see(page, '#bigbut', '3')
+  assert.equal(await page.inputValue('#day'), '20261002')
+  assert.ok(!await disabled(page, '#undobut'))
+  await tap(page, '#undobut')
+  await see(page, '#bigbut', '2')
+}, TOKYO)
+
+// Replicata: TallyBee from before each window had its own count left a count
+// of 5, with a comment, for yesterday (see OLDER). Open TallyBee; then open
+// it in another window.
+// Expectata: the 5 in the first window, comment, day and all; 0 in the
+// other, with no comment, for today, so that the 5 can't go twice.
+// Resultata (before): the 5 in both, as they shared one count.
+qual('a count left from before windows had their own goes to the first window only', async page => {
+  await page.clock.setFixedTime(NOON)
+  await page.goto(APP)
+  await see(page, '#bigbut', '5')
+  await see(page, '#comment', 'old')
+  const w = await window2(page, APP)
+  await see(w, '#bigbut', '0')
+  await see(w, '#comment', '')
+  assert.equal((await tallied(w)).day, null)
+  assert.equal((await tallied(page)).day, '20261001')
+}, { ...TOKYO, ...older({ count: 5, requestid: 'r-old', pin: null, // see OLDER
+                           comment: 'old', day: '20261001', undos: [],
+                           slug: 'pushups', folded: false }) })
+
+// Replicata: what a TallyBee window remembers of its own gets broken, like
+// missing its requestid (by a bug, say). Reload it.
+// Expectata: an error saying so.
+// Resultata (in a mutant that started the window afresh then): no error, the
+// count gone.
+qual("a broken memory of a window's own fails loudly", async (page, bee) => {
+  await page.goto(APP)
+  await see(page, '#bigbut', '0') // once TallyBee has started (see OLDER)
+  await page.evaluate(() =>
+    sessionStorage.setItem('tallybee', JSON.stringify({ count: 3 })))
+  await page.reload()
+  await see(page, '#status', /^Error: .*"count":3/)
+  await expectError(page, bee, /"count":3/)
+  // and the error from then showing the rest of the page, which can't be done
+  // with script.js stopped partway
+  await expectError(page, bee, /before initialization/)
+})
+
+// Replicata: tap 4, type the comment "x", and pick yesterday; then close
+// TallyBee (its tab, or its app), and open it again.
+// Expectata: the 4, the comment and the day back, and the UNDOs too: the
+// pick of the day, then the comment, then a tap.
+// Resultata (in the build where each window started at 0): 0, with no
+// comment, for today, and nothing to undo.
+qual('TallyBee closed and opened again has its count back, UNDO and all', async page => {
+  await page.clock.setFixedTime(NOON)
+  await login(page)
+  await tap(page, '#bigbut', 4)
+  await remark(page, 'x')
+  await page.selectOption('#day', '20261001')
+  const context = page.context()
+  await page.close()
+  const again = await context.newPage()
+  await again.goto(APP)
+  await see(again, '#goals', /pushups/)
+  await see(again, '#bigbut', '4')
+  await see(again, '#comment', 'x')
+  assert.equal(await again.inputValue('#day'), '20261001')
+  await tap(again, '#undobut')
+  assert.ok(await till(again, async () => await again.inputValue('#day') === '20261002'))
+  await tap(again, '#undobut')
+  await see(again, '#comment', '')
+  await tap(again, '#undobut')
+  await see(again, '#bigbut', '3')
+}, TOKYO)
+
+// Replicata: TallyBee in two windows: tap 3 in one, then 5 in the other.
+// Close both, and open TallyBee again.
+// Expectata: the 5, from the window whose count changed last. (Only one
+// count can come back, and that one's is the one TallyBee remembers.)
+// Resultata (in the build where each window started at 0): 0.
+qual('with two windows closed, TallyBee opened again has the count that changed last', async page => {
+  await login(page)
+  const w = await window2(page, APP)
+  await see(w, '#goals', /pushups/)
+  await page.bringToFront()
+  await tap(page, '#bigbut', 3)
+  await w.bringToFront()
+  await tap(w, '#bigbut', 5)
+  const context = page.context()
+  await page.close()
+  await w.close()
+  const again = await context.newPage()
+  await again.goto(APP)
+  await see(again, '#goals', /pushups/)
+  await see(again, '#bigbut', '5')
+})
+
+// --------------------------------------------------- code review (2026-10-13)
+
+// Replicata: log in, which keeps the goals in the tab (see goals in
+// script.js); then a goal gets made on Beeminder, "late", whose day ends at
+// 3am; at 1am in New York, open TallyBee at its URL in the same tab.
+// Expectata: the 2nd, the day it still is for "late".
+// Resultata (before): the 3rd, the day worked out with the stand-in for no
+// goal's deadline, midnight, as "late" wasn't among the goals kept, and never
+// worked out again.
+qual("a goal the tab hasn't loaded before gets its own day", async (page, bee) => {
+  await page.clock.setFixedTime(new Date('2026-10-03T05:00:00Z'))
+  await login(page)
+  bee.goals.push({ slug: 'late', kyoom: true, curval: 0, deadline: 3 * 3600,
+                   last_datapoint: null, safesum: 'safe for 1 day', queued: false })
+  await page.goto(APP + '?goal=late')
+  await see(page, '#safesum', 'safe for 1 day')
+  assert.equal(await page.inputValue('#day'), '20261002')
+}, TOKYO)
+
+// Replicata: a script on the page from elsewhere (like one a browser extension
+// adds) fails, which the browser reports, for a script from another site, with
+// no error in it, just "Script error.".
+// Expectata: that, in the status line, as for any error.
+// Resultata (before): nothing shown, as showing it failed, with no error to
+// take a message from.
+qual('an error reported with no error in it still shows', async page => {
+  await login(page)
+  await page.evaluate(() =>
+    dispatchEvent(new ErrorEvent('error', { message: 'Script error.' })))
+  await see(page, '#status', 'Error: Script error.')
+})
+
+// Replicata: on a browser whose English (Canada) dates come out as month/day/year,
+// as could happen with a change to CLDR, where browsers get their ways of
+// writing dates from, look at the day, at noon on the 2nd, and Submit.
+// Expectata: "Today (2nd)", and the datapoint for 20261002, as ever.
+// Resultata (before): an error at once, the day being "10/02/2026", no
+// daystamp at all.
+qual("the day doesn't depend on how the browser writes dates", async (page, bee) => {
+  await page.addInitScript(() => {
+    const parts = Intl.DateTimeFormat.prototype.formatToParts
+    Object.defineProperty(Intl.DateTimeFormat.prototype, 'format', { get() {
+      return d => {
+        const p = Object.fromEntries(parts.call(this, d).map(x => [x.type, x.value]))
+        return `${p.month}/${p.day}/${p.year}`
+      }
+    } })
+  })
+  await page.clock.setFixedTime(NOON)
+  await login(page)
+  assert.deepEqual((await days(page))[0], ['20261002', 'Today (2nd)'])
+  await tap(page, '#subbut')
+  await settled(page)
+  assert.deepEqual(posts(bee).map(p => p.params.daystamp), ['20261002'])
+}, TOKYO)
