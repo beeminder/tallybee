@@ -510,15 +510,34 @@ async function loadGoals() {
                    `No such goal: "${slug}"`)
 }
 
+// What a datapoint's comment says when none is typed, as Beedroid's tally
+// counter's does, like "via tallybeedroid at 16:45:08 PST", but "via
+// tallybee": which app sent it, and when (now), by the clock of the user's
+// timezone on Beeminder, as in Beedroid, like "via tallybee at 16:45:08 PDT".
+// The hours go from 00 to 23, and the timezone's abbreviation is the one in
+// effect, where Beedroid's is always the one for standard time, PST even in
+// summer. (From the time's parts, as for daystamp. Submit is grayed out till
+// the goals load, which they do with the user: see NOUSER.)
+function via() {
+  beeminder.assert(user !== NOUSER, JSON.stringify({ user }))
+  const { hour, minute, second, timeZoneName } = Object.fromEntries(
+    new Intl.DateTimeFormat('en', { timeZone: user.timezone, hourCycle: 'h23',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' })
+    .formatToParts(Date.now()).map(p => [p.type, p.value]))
+  return `via tallybee at ${hour}:${minute}:${second} ${timeZoneName}`
+}
+
 // Send the count, as it was when Submit got pressed, to Beeminder as a
 // datapoint on this page's goal. Submit stays grayed out till Beeminder replies,
 // but taps keep counting meanwhile, for next time.
-// The comment that goes with it, too, is the one from when Submit got pressed,
-// as typed (empty for none: Beeminder keeps which app sent a datapoint, and
-// when, on its own). And so is its day: the one picked, or else the page's
-// today (see day).
+// The comment that goes with it, too, is the one from when Submit got pressed:
+// as typed, or, with none typed, which app sent it, and when (see via), as in
+// Beedroid, whose form for typing a datapoint adds its "via beedroid at" and
+// the time only to one with no comment. And so is its day: the one picked, or
+// else the page's today (see day).
 function submit() {
-  const { count: n, requestid, comment, day } = load()
+  const { count: n, comment: typed, day } = load()
+  const comment = typed || via()
   const ds = day ?? today
   busy = true
   // status line while waiting for Beeminder to take the datapoint

@@ -1386,6 +1386,10 @@ qual('Submit says (∑) on goals that sum their datapoints, as on Beeminder', as
 // sent again.
 // SPEC CHANGE (via, 2026-10-13): no "via TallyBee at" and the time after
 // the comment (decided with the person working on this, AGENTS.md N7): no comment
+// SPEC CHANGE (via, 2026-10-19): with no comment typed, "via tallybee at" and
+// the time, as Beedroid's tally counter says "via tallybeedroid at" and the
+// time (the owner's ask, 2026-10-19; see "with no comment, Beeminder gets
+// which app sent it and when")
 qual('Submit sends the count to the selected goal and zeroes the count', async (page, bee) => {
   await login(page)
   await tap(page, '#bigbut', 3)
@@ -1395,7 +1399,7 @@ qual('Submit sends the count to the selected goal and zeroes the count', async (
   assert.equal(p.path, 'users/alice/goals/pushups/datapoints.json')
   assert.equal(p.params.access_token, TOKEN)
   assert.equal(String(p.params.value), '3')
-  assert.equal(p.params.comment, '')
+  assert.match(p.params.comment, /^via tallybee at \d\d:\d\d:\d\d E[DS]T$/)
   assert.ok(p.params.requestid)
   await see(page, '#status', /pushups/)
   assert.equal(await page.getAttribute('#status', 'data-kind'), 'ok')
@@ -2661,7 +2665,16 @@ qual('a comment typed before Submit goes with the datapoint', async (page, bee) 
 // the comment (decided with the person working on this, AGENTS.md N7), and renamed from "Beeminder gets the comment exactly as typed, and
 // with none, exactly what it got before": the first datapoint's comment is
 // empty, and the second's is the comment as typed, spaces and all
-qual('Beeminder gets the comment exactly as typed, and with none, none', async (page, bee) => {
+// SPEC CHANGE (via, 2026-10-19), and renamed from "Beeminder gets the comment
+// exactly as typed, and with none, none": with no comment typed, "via
+// tallybee at" and the time, as Beedroid's tally counter says "via
+// tallybeedroid at" and the time (the owner's ask, 2026-10-19), at 12:34:56
+// UTC, 08:34:56 in New York: the first datapoint's comment is "via tallybee
+// at 08:34:56 EDT", and the second's is the comment as typed, spaces and all,
+// with nothing after it, as Beedroid sends a comment typed (see "with no
+// comment, Beeminder gets which app sent it and when")
+qual('Beeminder gets the comment exactly as typed, and with none, which app sent it and when', async (page, bee) => {
+  await page.clock.setFixedTime(new Date('2026-09-30T12:34:56Z'))
   await login(page)
   await tap(page, '#bigbut')
   await tap(page, '#subbut')
@@ -2670,7 +2683,61 @@ qual('Beeminder gets the comment exactly as typed, and with none, none', async (
   await tap(page, '#bigbut')
   await tap(page, '#subbut')
   await see(page, '#bigbut', '0')
-  assert.deepEqual(posts(bee).map(p => p.params.comment), ['', '  set 2 '])
+  assert.deepEqual(posts(bee).map(p => p.params.comment),
+                   ['via tallybee at 08:34:56 EDT', '  set 2 '])
+})
+
+// Replicata: at 4:45:08pm on 2026-10-02 in New York (alice's timezone on
+// Beeminder, though her phone is set to Tokyo's, where it's 5:45:08am on the
+// 3rd), tap 3 and Submit, with no comment typed; and, another time, the same
+// at 7 seconds past midnight on 2026-12-01 in New York, on standard time by
+// then.
+// Expectata: the datapoint's comment says which app sent it, and when, as
+// Beedroid's tally counter's does, like "via tallybeedroid at 16:45:08 PST",
+// but "via tallybee" (the owner's ask, 2026-10-19): "via tallybee at 16:45:08
+// EDT", the time by the clock of alice's timezone, as in Beedroid, hours from
+// 00 to 23, and the timezone's abbreviation, the one in effect then (where
+// Beedroid's is always the one for standard time, so says PST in summer too;
+// the owner's choice, 2026-10-19);
+// and "via tallybee at 00:00:07 EST". (With a comment typed, the comment
+// goes alone, as Beedroid sends one typed, the owner's choice, 2026-10-19:
+// see "a comment typed before Submit goes with the datapoint".)
+// Resultata (before): no comment.
+for (const [now, via] of [['2026-10-02T20:45:08Z', 'via tallybee at 16:45:08 EDT'],
+                          ['2026-12-01T05:00:07Z', 'via tallybee at 00:00:07 EST']])
+  qual(`with no comment, Beeminder gets which app sent it and when (${via})`,
+       async (page, bee) => {
+    await page.clock.setFixedTime(new Date(now))
+    await login(page)
+    await tap(page, '#bigbut', 3)
+    await tap(page, '#subbut')
+    await see(page, '#bigbut', '0')
+    assert.deepEqual(posts(bee).map(p => p.params.comment), [via])
+  }, TOKYO)
+
+// Replicata: at 4:45:08pm in New York, with no comment typed, tap 3, and
+// Submit while a refresh of the goals holds it up (as when you come back to
+// TallyBee), till 30 seconds later.
+// Expectata: "via tallybee at 16:45:08 EDT", the time when Submit was
+// pressed, as Beedroid's says the time its Submit was pressed, and as the
+// comment typed is the one from then (see "Submit sends the comment as it was
+// when pressed, even while waiting its turn").
+// Resultata (in a mutant that took the time when the Submit's turn came):
+// 16:45:38.
+qual('the time in the comment is when Submit was pressed, even if it waits its turn', async (page, bee) => {
+  await page.clock.setFixedTime(new Date('2026-10-02T20:45:08Z'))
+  await login(page)
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
+  await comeback(page)
+  await calls(page, bee, LOAD + 2)
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  await page.clock.setFixedTime(new Date('2026-10-02T20:45:38Z'))
+  open()
+  await see(page, '#bigbut', '0')
+  assert.deepEqual(posts(bee).map(p => p.params.comment),
+                   ['via tallybee at 16:45:08 EDT'])
 })
 
 // Replicata: type a comment, without pressing Enter, and the phone reloads
@@ -2712,6 +2779,11 @@ qual('the comment survives reloading, and each TallyBee window has its own', asy
 // that Clear be grayed out at 0): a tap before the Clear.
 // SPEC CHANGE (via, 2026-10-13): no "via TallyBee at" and the time after
 // the comment (decided with the person working on this, AGENTS.md N7): an empty comment
+// SPEC CHANGE (via, 2026-10-19): with no comment typed, "via tallybee at" and
+// the time, as Beedroid's tally counter says "via tallybeedroid at" and the
+// time (the owner's ask, 2026-10-19; see "with no comment, Beeminder gets
+// which app sent it and when"): the second datapoint's comment is "via
+// tallybee at" and the time, as for any with no comment typed, not "set 2"
 qual('Submit and Clear start the next datapoint with no comment', async (page, bee) => {
   await login(page)
   await remark(page, 'set 1')
@@ -2726,7 +2798,7 @@ qual('Submit and Clear start the next datapoint with no comment', async (page, b
   await tap(page, '#bigbut', 2)
   await tap(page, '#subbut')
   await see(page, '#bigbut', '0')
-  assert.equal(posts(bee)[1].params.comment, '')
+  assert.match(posts(bee)[1].params.comment, /^via tallybee at \d\d:\d\d:\d\d E[DS]T$/)
 })
 
 // Replicata: type a comment and tap 3, then press Clear by mistake. Press
