@@ -142,15 +142,22 @@ async function getLastAdded(goal) {
 // Add a datapoint to the user's goal, for the day with daystamp daystamp (like
 // 20261002), and return the datapoint as Beeminder saved it. The requestid
 // makes resending the datapoint update it in place rather than add a
-// duplicate. A resend that's the same in every way, as after a reply got lost,
-// Beeminder ignores, and, its API docs say, answers with "duplicate
-// datapoint" (in what form, they don't say), which shows like any error.
+// duplicate. A resend that would change nothing, of value, day and comment,
+// as after a reply got lost, Beeminder ignores, answering with a 422 that
+// says "Duplicate request" (see create in its
+// app/controllers/api/v1/datapoints_controller.rb; its API docs call it
+// "duplicate datapoint"). That means it has the datapoint as sent, so that's
+// what this returns, as for any datapoint Beeminder takes.
 async function addDatapoint(goal, value, daystamp, comment, requestid) {
   const token = getToken();
   const url = `${API}users/me/goals/${goal}/datapoints.json`;
-  return check(await fetch(url, { method: 'POST', body: new URLSearchParams(
+  const response = await fetch(url, { method: 'POST', body: new URLSearchParams(
     { access_token: token, value, daystamp, comment, requestid }),
-    signal: AbortSignal.timeout(PATIENCE) }), token);
+    signal: AbortSignal.timeout(PATIENCE) });
+  if (response.status === 422 &&
+      (await response.clone().json()).errors === 'Duplicate request')
+    return { value, daystamp, comment, requestid };
+  return check(response, token);
 }
 
 export {

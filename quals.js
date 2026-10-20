@@ -108,7 +108,7 @@ const roboto = context => context.addInitScript(faces => {
 
 // The fake Beeminder's state as each qual starts (see qual)
 const newbee = () => ({ goals: structuredClone(GOALS), user: structuredClone(ALICE),
-                        added: {}, tokens: [TOKEN],
+                        added: {}, saved: {}, tokens: [TOKEN],
                         calls: [], authorizes: [], strays: [], errors: [],
                         reply: () => null })
 
@@ -196,9 +196,21 @@ function defaultReply(bee, { method, path, params }) {
   // last_datapoint.
   if (method === 'GET' && dp) return [200, [bee.added[dp[1]] ??
     bee.goals.find(g => g.slug === dp[1]).last_datapoint].filter(Boolean)]
-  if (method === 'POST' && dp) return [200, bee.added[dp[1]] = {
-    id: `dp${bee.calls.length}`, value: Number(params.value),
-    daystamp: params.daystamp, comment: params.comment, requestid: params.requestid }]
+  // A POST adds a datapoint to the goal, or, if the goal has one with its
+  // requestid already, updates that one, as the real Beeminder does, which
+  // answers one that would change nothing, of value, day and comment, with a
+  // 422 saying "Duplicate request" (see create in its
+  // app/controllers/api/v1/datapoints_controller.rb). So the fake keeps each
+  // datapoint it gets from a POST in bee.saved, under its goal and requestid,
+  // like "pushups r1".
+  if (method === 'POST' && dp) {
+    const key = `${dp[1]} ${params.requestid}`, old = bee.saved[key]
+    const d = { value: Number(params.value), daystamp: params.daystamp,
+                comment: params.comment, requestid: params.requestid }
+    if (old && ['value', 'daystamp', 'comment'].every(k => old[k] === d[k]))
+      return [422, { errors: 'Duplicate request' }]
+    return [200, bee.added[dp[1]] = bee.saved[key] = { id: `dp${bee.calls.length}`, ...d }]
+  }
   return [404, { errors: { message: `Fake Beeminder has no ${method} ${path}` } }]
 }
 
@@ -2262,10 +2274,12 @@ qual('the footer shows what Submit will send', async page => {
 // For bee.reply (see qual): Beeminder takes the datapoint TallyBee POSTs, as
 // the newest of odometer goal pages (bee.goals[1]), which is then "safe for 4
 // days", but its reply gets lost
+// (It takes it as from any POST, so that a resend of it, with the same
+// requestid, updates it, or, the same in every way, gets "Duplicate request":
+// see defaultReply.)
 const lostreply = bee => c => {
   if (c.method !== 'POST') return null
-  bee.goals[1].last_datapoint = datapoint(Number(c.params.value),
-    { daystamp: c.params.daystamp, comment: c.params.comment, requestid: c.params.requestid })
+  defaultReply(bee, c)
   bee.goals[1].safesum = 'safe for 4 days'
   return 'abort'
 }
@@ -2275,6 +2289,12 @@ const lostreply = bee => c => {
 // now at 123, and Submit again.
 // Expectata: the resend is 123 again, updating that datapoint in place.
 // Resultata (before): 126, as if 3 more pages.
+// (A resend in the same second as the first try is the same in every way,
+// "via tallybee at" and the time and all, so Beeminder answers it with
+// "Duplicate request", which counts as sent: see "a resend of a datapoint
+// Beeminder already has counts as sent". Before that counted, this failed
+// when it was quick enough, from 2026-10-19, when the fake Beeminder started
+// answering that way, as the real one does.)
 qual('resending an odometer datapoint after a lost reply sends the same value', async (page, bee) => {
   await login(page)
   await choose(page, 'pages')
@@ -2291,6 +2311,52 @@ qual('resending an odometer datapoint after a lost reply sends the same value', 
   assert.deepEqual(values(bee), ['123', '123'])
   const [a, b] = posts(bee).map(p => p.params.requestid)
   assert.equal(a, b)
+})
+
+// Replicata: on odometer goal pages (at 120), type "felt strong", tap 3, and
+// Submit. Beeminder saves 123, but its reply is lost. Submit again.
+// Expectata: Beeminder answers the resend, the same in every way, with a 422
+// saying "Duplicate request", as the real one does (see defaultReply), which
+// means it has the datapoint as sent, so TallyBee counts it as sent (the
+// owner's ask, 2026-10-19): a message saying that it worked, the count back
+// to 0, and the last datapoint the one sent, 123 "felt strong", as for any
+// Submit that gets there.
+// Resultata (before): "Error: 422 {"errors":"Duplicate request"}", and the 3
+// kept, there to be sent again, to the same answer, for good.
+qual('a resend of a datapoint Beeminder already has counts as sent', async (page, bee) => {
+  await login(page)
+  await choose(page, 'pages')
+  bee.reply = lostreply(bee)
+  await remark(page, 'felt strong')
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  await expectError(page, bee, /fetch/i)
+  bee.reply = () => null
+  await tap(page, '#subbut')
+  await see(page, '#status', /^✓/)
+  assert.equal((await tallied(page)).count, 0)
+  await see(page, '#lastdp', / 123 "felt strong"$/)
+  const [a, b] = posts(bee)
+  assert.deepEqual(b.params, a.params)
+})
+
+// Replicata: tap 3 and Submit; Beeminder turns the datapoint away with a 422
+// of another kind, as it does when the datapoint won't do, like
+// {"errors":{"value":["is not a number"]}}.
+// Expectata: an error saying so, and the 3 kept, as with any error: only a
+// "Duplicate request" means that Beeminder has the datapoint.
+// Resultata (in a mutant that took any 422 for a "Duplicate request"): "✓
+// Submission successful: 3 → pushups", and the 3 gone, with nothing on
+// Beeminder.
+qual('only "Duplicate request" counts as sent: any other 422 is an error', async (page, bee) => {
+  await login(page)
+  bee.reply = c => c.method === 'POST'
+    ? [422, { errors: { value: ['is not a number'] } }] : null
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  await see(page, '#status', /^Error: 422 .*is not a number/)
+  await expectError(page, bee, /is not a number/)
+  assert.equal(await count(page), 3)
 })
 
 // Replicata: on odometer goal pages (at 120), tap 3 and Submit. Beeminder saves
