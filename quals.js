@@ -1259,10 +1259,16 @@ qual('each TallyBee window has its own count', async page => {
 // count when it gets past 9999.
 // Resultata (in a mutant whose count never shrank): the digits running off the
 // screen, out to 483px on a 390px screen.
+// SPEC CHANGE (big count, 2026-10-19, the owner's OK): type 12345 as the
+// number to send, rather than tapping 12345 times. Each tap saves the whole
+// UNDO history since the last Submit, so the 12345 taps, all at once, took
+// about 50 seconds to show, past WAIT, failing this at least since 43f7e1e,
+// though each tap took at most 6ms, at up to 12000 taps since a Submit, on
+// the Mac this was measured on.
 qual('a big count still fits on the screen', async page => {
   await login(page)
   const vw = page.viewportSize().width
-  await taps(page, 12345)
+  await type(page, '12345')
   await see(page, '#bigbut', '12345')
   const r = await page.evaluate(() => {
     const range = document.createRange()
