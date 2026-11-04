@@ -63,11 +63,12 @@
      Beeminder's summary of what's due, like "+2 pushups due by 12am" (see
      script.js). With no goal, it's the user's name alone, if any. -->
 <div id="topline"><span id="goalname"></span> <span id="safesum"></span></div>
-<!-- While we wait on Beeminder, the infinibee (Beeminder's bee logo, from
-     beeminder.com/press) flies a lemniscate (a figure eight; see style.css),
-     as on Beeminder's own site, on a canvas the shape of Beeminder's, 400 by
-     200, with the bee as big on it, 50 by 50 -->
-<div id="infinibee" hidden>
+<!-- While we wait on Beeminder, or for script.js as the page starts, the
+     infinibee (Beeminder's bee logo, from beeminder.com/press) flies a
+     lemniscate (a figure eight; see style.css), as on Beeminder's own site, on
+     a canvas the shape of Beeminder's, 400 by 200, with the bee as big on it,
+     50 by 50 -->
+<div id="infinibee">
 <svg viewBox="-200 -100 400 200">
 <image href="infinibee.svg" x="-25" y="-25" width="50" height="50"/>
 </svg>
@@ -76,13 +77,16 @@
 <!-- The menu button: three lines, the usual sign of a menu, at the top right
      corner of the screen, where menus usually are, over the big button, which
      gets the touches around it. It opens the menu (see #menu). -->
-<button id="menubut" aria-label="Menu" aria-haspopup="dialog"><svg
+<button id="menubut" hidden aria-label="Menu" aria-haspopup="dialog"><svg
   viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
   stroke-width="2" stroke-linecap="round" aria-hidden="true"><path
   d="M2.5 3.5h11M2.5 8h11M2.5 12.5h11"/></svg></button>
 </div> <!-- stage -->
 
-<div class="footer">
+<!-- The page starts out blank but for the infinibee, the footer and the menu
+     button hidden, till script.js is there to make them work, and shows them
+     (see render), or to say what went wrong (see fail) -->
+<div id="footer" class="footer" hidden>
 <!-- The status line comes first, so that a message, like the one Submit shows
      at once, grows the footer up into the big button rather than moving a
      control out from under the finger that just tapped it. Screen readers
@@ -244,6 +248,16 @@ if (ancient_browser_check()) {
 // -----------------------------------------------------------------------------
 </script>
 
-<script type="module" src="script.js"></script>
+<!-- If script.js, or what it imports, can't be had at all, as with a 404 while
+     TallyBee is being published, there's no script.js to take the page out of
+     its blank start (see #footer), so this says so. -->
+<!-- TODO: what to say when TallyBee's script can't load, like "TallyBee couldn't
+     load. Try reloading." -->
+<script type="module" src="script.js" onerror="
+  document.getElementById('footer').hidden = false
+  document.getElementById('infinibee').hidden = true
+  document.getElementById('status').dataset.kind = 'err'
+  document.getElementById('status').textContent =
+    'Error: TallyBee onerari non potuit. Renova paginam.'"></script>
 </body>
 </html>

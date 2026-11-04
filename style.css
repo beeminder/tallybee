@@ -31,7 +31,8 @@
 }
 
 /* Nothing here keeps the page from being pulled down to reload it, as on any
-   web page (no overflow: hidden, which can keep phones from doing that) */
+   web page (no overflow: hidden, which can keep phones from doing that), by a
+   touch on the footer: the big button keeps its touches (see #bigbut). */
 html, body {
   margin: 0;
   height: 100%;
@@ -109,10 +110,7 @@ body {
   -ms-user-select: none; /* IE 10 and IE 11 */
   user-select: none; /* Standard syntax */
   -webkit-touch-callout: none; /* no long-press menu on iPhones */
-  /* Touches are taps, but for one that moves up or down, which the browser
-     can take, to pull the page down to reload it; it then counts nothing (see
-     script.js). No zooming. */
-  touch-action: pan-y;
+  touch-action: none; /* touches are taps, never scrolling or zooming */
   display: grid;
   place-items: center;
   overflow: hidden;
@@ -565,6 +563,12 @@ body {
   margin-top: 8px;
 }
 #infinibee svg { display: block; }
+/* While the page starts, blank but for the infinibee (see #footer in
+   index.html), it's in the middle of the black, and, so that it doesn't flash
+   on a page that's quick to start, it waits a moment before it shows */
+body:has(> .footer[hidden]) #top { align-self: center; }
+body:has(> .footer[hidden]) #infinibee { animation: appear 1ms 150ms backwards; }
+@keyframes appear { from { opacity: 0; } }
 /* The flight path is Beeminder's (its lemniscate-bernoulli keyframes, in
    beeminder.com's CSS): the lemniscate of Bernoulli, stretched up and down,
    x = 175 cos t / (1 + sin^2 t), y = -212 sin t cos t / (1 + sin^2 t) (in the
