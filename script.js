@@ -182,17 +182,6 @@ function edited(keys, f) {
   })
 }
 
-// Whether another TallyBee window is open: each holds this lock, shared, for
-// as long as it's open (the browser lets go of it as the window closes). A
-// window that opens beside another, with nothing of its own yet, starts
-// afresh, rather than taking the tally TallyBee remembers (see load), which
-// may be the other's.
-const OPEN = 'tallybee-open'
-if ((await navigator.locks.query()).held.some(l => l.name === OPEN) &&
-    sessionStorage.getItem('tallybee') === null)
-  sessionStorage.setItem('tallybee', JSON.stringify(blank()))
-navigator.locks.request(OPEN, { mode: 'shared' }, () => new Promise(() => {}))
-
 // This page's goal: the one its URL names, else the one selected last (or, the
 // first time, till the goals load, none)
 let slug = new URLSearchParams(location.search).get('goal') ?? load().slug
@@ -233,6 +222,26 @@ function manifest() {
             icon('icon-maskable.png', '512x512', 'maskable')],
   }))
 }
+
+// Make TallyBee installable as an app (see manifest). The page starts with no
+// manifest, since Safari reads only the first one a page has. It's added here,
+// before anything that waits (see OPEN), so that it's there by the time the
+// page has loaded, for browsers that go by what they find then.
+document.head.append(Object.assign(document.createElement('link'),
+                                   { id: 'manifest', rel: 'manifest', href: manifest() }))
+
+// Whether another TallyBee window is open: each holds this lock, shared, for
+// as long as it's open (the browser lets go of it as the window closes). A
+// window that opens beside another, with nothing of its own yet, starts
+// afresh, rather than taking the tally TallyBee remembers (see load), which
+// may be the other's. Only such a window asks, as the asking holds up all that
+// comes after this, like the big button's working: not a page reloaded, or
+// gone to for another goal, whose window has its own already.
+const OPEN = 'tallybee-open'
+if (sessionStorage.getItem('tallybee') === null &&
+    (await navigator.locks.query()).held.some(l => l.name === OPEN))
+  sessionStorage.setItem('tallybee', JSON.stringify(blank()))
+navigator.locks.request(OPEN, { mode: 'shared' }, () => new Promise(() => {}))
 
 // Whether TallyBee is waiting on something, so can't take another datapoint
 // or goal: on Beeminder to take a datapoint, or on another goal's page to load
@@ -415,6 +424,8 @@ function render() {
          $('goallink').textContent = `beeminder.com/${user.username}/${g.slug}`
          $('goallink').href = `https://www.beeminder.com/${user.username}/${g.slug}` }
   $('infinibee').hidden = !busy
+  // The page starts out blank but for the infinibee (see #footer in index.html)
+  $('footer').hidden = $('menubut').hidden = false
   // Logged in, the login button is hidden, as the top line says who's logged
   // in (see #goalname): pressing it would log in again, which gets a new token,
   // and so logs TallyBee out on your other devices (Beeminder keeps one token
@@ -438,6 +449,11 @@ function fail(err) {
   // prefix saying that what follows is an error message (which comes from
   // Beeminder, the browser, or an assert)
   say('err', `Error: ${err.message}`)
+  // What failed may be TallyBee's starting, before it has shown anything, and
+  // with render unable to, so that this is all that takes the page out of its
+  // blank start (see #footer in index.html)
+  $('footer').hidden = $('menubut').hidden = false
+  $('infinibee').hidden = true
   render()
 }
 
@@ -749,11 +765,6 @@ $('newdayx').addEventListener('click', () => {
 
 // Let TallyBee open with no connection (see sw.js), where browsers can
 navigator.serviceWorker?.register('sw.js')
-// Make TallyBee installable as an app (see manifest). The page starts with no
-// manifest, since Safari reads only the first one a page has.
-document.head.append(Object.assign(document.createElement('link'),
-                                   { id: 'manifest', rel: 'manifest', href: manifest() }))
-
 dropdown() // as kept (see goals), till they load
 update(t => { t.slug = slug }) // this page's goal is now the one selected last
 // Log in with what Beeminder just sent us, if anything. Then load the goals,

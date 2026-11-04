@@ -291,9 +291,18 @@ async function till(page, f) {
 async function see(page, sel, want) {
   const ok = s => typeof want === 'string' ? s === want : want.test(s)
   let s
-  assert.ok(await till(page, async () => ok(s = await page.locator(sel).first()
-    .evaluate(e => e.tagName === 'INPUT' ? e.value : e.textContent))),
-            `${sel} says ${JSON.stringify(s)} instead of ${want}`)
+  // (A page that's loading itself again, as TallyBee does after a login, can go
+  // from under a look at it. Then look again.)
+  assert.ok(await till(page, async () => {
+    try {
+      s = await page.locator(sel).first()
+        .evaluate(e => e.tagName === 'INPUT' ? e.value : e.textContent)
+    } catch (e) {
+      if (/context was destroyed/.test(e.message)) return false
+      throw e
+    }
+    return ok(s)
+  }), `${sel} says ${JSON.stringify(s)} instead of ${want}`)
 }
 
 // Wait up to WAIT ms for an uncaught error matching regex re, and forgive it
@@ -347,8 +356,11 @@ function gate() {
 }
 
 // Tap the element matching sel n times, or, with no touchscreen (see DESK),
-// click it
+// click it, once TallyBee has started, as shown by the number it puts on the
+// big button by the time all its controls work. (In a new window, it starts
+// after the page's load event, which page.goto waits for: see OLDER.)
 async function tap(page, sel, n = 1) {
+  await see(page, '#count', /./)
   const touch = await page.evaluate(() => navigator.maxTouchPoints > 0)
   for (let i = 0; i < n; i++) await (touch ? page.tap(sel) : page.click(sel))
 }
@@ -404,6 +416,20 @@ async function touch(page, points, holdMs) {
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
 }
 
+// A raw touch (see touch) that lands at x, y, slides by dx, dy, in steps, and
+// lifts
+async function slide(page, [x, y], [dx, dy]) {
+  const cdp = await page.context().newCDPSession(page)
+  const at = (px, py) => ({ touchPoints: [{ x: px, y: py, id: 0 }] })
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', ...at(x, y) })
+  for (let i = 1; i <= 10; i++) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove',
+      ...at(x + dx * i / 10, y + dy * i / 10) })
+    await page.waitForTimeout(16)
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+}
+
 // A second window (tab, or home-screen icon sharing the same storage), open
 // at url
 async function window2(page, url) {
@@ -419,10 +445,7 @@ const status = (page, url) =>
 // The app manifest Chrome finds on the page: json, what it says, and parsed,
 // how Chrome reads it, with its URLs resolved and its fields' names in
 // camelCase, like startUrl (though Chrome leaves some out, like short_name)
-// (once script.js has given the page its manifest, which, since 2026-10-13, it
-// does after the page's load event, which page.goto waits for: see OLDER)
 async function appManifest(page) {
-  await page.locator('#manifest').waitFor({ state: 'attached' })
   const cdp = await page.context().newCDPSession(page)
   const { errors, data, manifest } = await cdp.send('Page.getAppManifest')
   assert.deepEqual(errors, [])
@@ -823,6 +846,7 @@ qual("a 401 for an old token doesn't log out a newer login", async (page, bee) =
 // person working on this, 2026-10-12)
 qual("logged in, the username heads the top line, and there's no login button", async (page, bee) => {
   await page.goto(APP)
+  await see(page, '#count', /./) // once it has started (see tap)
   assert.ok(await page.isVisible('#loginbut'), 'logged out')
   await login(page)
   await see(page, '#goalname', 'alice/pushups')
@@ -1311,11 +1335,28 @@ qual('the count stands out from the black', async page => {
 // quals get. A nose that slides up or down far enough gets taken over too.)
 // Resultata (before): a pull counted one, and reloaded nothing, as the big
 // button kept every touch for itself.
-qual('pulling down to reload is left to the browser, and counts nothing', async page => {
+// SPEC CHANGE (pull, 2026-11-04), and renamed from "pulling down to reload is
+// left to the browser, and counts nothing": back to the big button keeping
+// every touch for itself (touch-action: none), at the request of the person
+// working on this, as a nose that slid a little counted nothing (AGENTS.md
+// N20). So a touch that slides, any way, even off the big button, counts one,
+// with the browser taking none of it, and a pull that starts on the big button
+// reloads nothing. A pull that starts on the footer still can (nothing on the
+// page keeps it from being pulled); and a touch that the phone itself takes
+// over, as for a swipe in from the screen's edge, which it cancels, still
+// counts nothing.
+qual('every touch on the big button counts, even one that slides', async page => {
   await login(page)
+  const edge = (await box(page, '#bigbut')).height
+  const moves = [[[195, 300], [0, 200]], [[195, 500], [0, -200]], [[100, 300], [150, 0]],
+                 [[195, edge - 20], [0, 60]]]
+  for (const [i, [from, by]] of moves.entries()) {
+    await slide(page, from, by)
+    await see(page, '#bigbut', String(i + 1))
+  }
   const css = (sel, props) => page.$eval(sel, (e, ps) =>
     ps.map(p => getComputedStyle(e)[p]), props)
-  assert.deepEqual(await css('#bigbut', ['touchAction']), ['pan-y'])
+  assert.deepEqual(await css('#bigbut', ['touchAction']), ['none'])
   for (const sel of ['html', 'body'])
     assert.deepEqual(await css(sel, ['overflowY', 'overscrollBehaviorY']),
                      ['visible', 'auto'], sel)
@@ -1323,9 +1364,9 @@ qual('pulling down to reload is left to the browser, and counts nothing', async 
     for (const type of ['pointerdown', 'pointercancel'])
       b.dispatchEvent(new PointerEvent(type, { isPrimary: true, bubbles: true }))
   })
-  assert.equal(await count(page), 0)
+  assert.equal(await count(page), moves.length)
   await tap(page, '#bigbut')
-  assert.equal(await count(page), 1)
+  assert.equal(await count(page), moves.length + 1)
 })
 
 // Replicata: open TallyBee installed as an app, and pull down on the big
@@ -1340,7 +1381,11 @@ qual('pulling down to reload is left to the browser, and counts nothing', async 
 // clipping it, with @media (display-mode: standalone) { html, body { overflow:
 // hidden } }): html and body overflow-y hidden, which keeps Chrome from
 // pulling to reload.
-test('in an installed app too, pulling down to reload is left to the browser', async () => {
+// SPEC CHANGE (pull, 2026-11-04), and renamed from "in an installed app too,
+// pulling down to reload is left to the browser": as in a browser tab (see the
+// qual above), the big button keeps every touch for itself, and a pull can
+// start only on the footer
+test('in an installed app too, the big button keeps its touches', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'tallybee-quals-'))
   // (The app window opens at TallyBee's URL before the routes below can answer
   // for it, so the host resolver rules keep it off the network.)
@@ -1356,7 +1401,7 @@ test('in an installed app too, pulling down to reload is left to the browser', a
     assert.ok(await page.evaluate(() => matchMedia('(display-mode: standalone)').matches))
     const css = (sel, props) => page.$eval(sel, (e, ps) =>
       ps.map(p => getComputedStyle(e)[p]), props)
-    assert.deepEqual(await css('#bigbut', ['touchAction']), ['pan-y'])
+    assert.deepEqual(await css('#bigbut', ['touchAction']), ['none'])
     for (const sel of ['html', 'body'])
       assert.deepEqual(await css(sel, ['overflowY', 'overscrollBehaviorY']),
                        ['visible', 'auto'], sel)
@@ -2941,6 +2986,34 @@ qual('UNDO pressed while typing the comment leaves what is typed next undoable',
   await see(page, '#comment', '')
 })
 
+// Replicata: tap 2, tap the comment field, and type "a"; press Clear with the
+// field still focused (as in browsers where pressing a button leaves the focus
+// where it was, like Safari); type "b", and press UNDO twice.
+// Expectata: the first UNDO takes back just the "b", to no comment, with the
+// count still 0; the second takes back the Clear, to "a" and the 2.
+// Resultata (in a mutant whose edit gave UNDO a way back only at its first
+// keystroke, or after an UNDO): the first UNDO took back the Clear, and the "b"
+// with it.
+qual('a Clear while typing the comment leaves what is typed next undoable on its own', async page => {
+  await login(page)
+  await tap(page, '#bigbut', 2)
+  await tap(page, '#comment')
+  await page.keyboard.type('a')
+  const press = sel => page.$eval(sel, b => b.click()) // no focus moves
+  await press('#clearbut')
+  await see(page, '#bigbut', '0')
+  await see(page, '#comment', '')
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'comment')
+  await page.keyboard.type('b')
+  await see(page, '#comment', 'b')
+  await press('#undobut')
+  await see(page, '#comment', '')
+  await see(page, '#bigbut', '0')
+  await press('#undobut')
+  await see(page, '#comment', 'a')
+  await see(page, '#bigbut', '2')
+})
+
 // Replicata: on odometer goal pages (at 120), tap 3, type a comment, and
 // Submit. Beeminder saves 123, but its reply is lost. Switch away and back,
 // which refreshes the goals, now at 123. Press UNDO, which takes back the
@@ -3599,6 +3672,9 @@ qual("the goal's link, under the dropdown, says where it goes: beeminder.com/USE
   await page.goto(APP)
   const link = () => page.$eval('#goallink', a => [a.textContent, a.getAttribute('href'),
                                                    a.target])
+    // (TallyBee starts after the page's load event, which page.goto waits for: see
+  // OLDER)
+  await see(page, '#goallink', /./)
   assert.deepEqual(await link(), ['beeminder.com', null, '_blank'], 'logged out')
   assert.ok(await opacity(page, '#goallink') < 0.5, 'logged out: grayed out')
   await login(page)
@@ -3844,10 +3920,6 @@ test('Chrome has no complaint about TallyBee as an app', async () => {
     await localhost(async url => {
       const page = await context.newPage()
       await page.goto(url + '?goal=pages')
-      // once script.js has given the page its manifest, which, since 2026-10-13,
-      // it does after the page's load event, which page.goto waits for (see
-      // OLDER)
-      await page.locator('#manifest').waitFor({ state: 'attached' })
       const cdp = await context.newCDPSession(page)
       const { installabilityErrors } = await cdp.send('Page.getInstallabilityErrors')
       assert.deepEqual(installabilityErrors.map(e => e.errorId), [])
@@ -4098,7 +4170,6 @@ test('a 404 while TallyBee is being published leaves its offline copy alone', as
 // that icon not the size it said.
 qual("the app manifest: TallyBee, standalone, black, with icons that exist", async page => {
   await page.goto(APP)
-  await page.locator('#manifest').waitFor({ state: 'attached' }) // see appManifest
   const cdp = await page.context().newCDPSession(page)
   const { url, errors, data } = await cdp.send('Page.getAppManifest')
   assert.deepEqual(errors, [])
@@ -4128,7 +4199,6 @@ qual("the app manifest: TallyBee, standalone, black, with icons that exist", asy
 // lot of empty space around them.
 qual("Android's icon: big tally marks, the disclosure, nothing outside the middle 80%", async page => {
   await page.goto(APP)
-  await page.locator('#manifest').waitFor({ state: 'attached' }) // see appManifest
   const cdp = await page.context().newCDPSession(page)
   const { url, data } = await cdp.send('Page.getAppManifest')
   const icon = JSON.parse(data).icons.find(i => i.purpose === 'maskable')
@@ -4282,6 +4352,7 @@ for (const [width, height, lines] of [[390, 844, [0, 1, 2]], [360, 780, [0, 1, 2
 qual('the login button heads the footer, as wide as its label, which wraps only if it must', async page => {
   await page.setViewportSize({ width: 320, height: 568 })
   await page.goto(APP)
+  await see(page, '#count', /./) // once it has started (see tap)
   let l = await box(page, '#loginbut')
   assert.ok(l.x === 16 && l.x + l.width <= 304 && l.height < 2 * 44, JSON.stringify(l))
   await page.setViewportSize({ width: 844, height: 390 })
@@ -5505,14 +5576,20 @@ qual('nothing in the footer shifts sideways as the count changes, till it gets a
 // SPEC CHANGE (menu, 2026-10-08): this was "the dropdown and Submit stay put
 // as the goals load"; the dropdown is in the menu, and the form row is what
 // could move
+// SPEC CHANGE (clock, 2026-11-04): at a set time, with the phone in alice's
+// timezone, as what day it is depends on the goals: on a phone where it's
+// another day than in alice's timezone, the day's words, and so its width, do
+// change as the goals load (see "the day shows, as Beeminder's own form shows
+// it"), so this qual failed for hours each day on a computer set to UTC
 qual('the form row and Submit stay put as the goals load', async page => {
+  await page.clock.setFixedTime(NOON)
   await page.goto(APP)
   await tap(page, '#bigbut', 3)
   const where = () => Promise.all(['#day', '#num', '#comment', '#subbut'].map(s => box(page, s)))
   const a = await where()
   await login(page)
   assert.deepEqual(await where(), a)
-})
+}, { timezoneId: ALICE.timezone })
 
 // Replicata: open TallyBee without logging in, and look at the send row.
 // Expectata: the dropdown, the goal's link, the day and Submit grayed out,
@@ -6552,3 +6629,112 @@ qual("the day doesn't depend on how the browser writes dates", async (page, bee)
   await settled(page)
   assert.deepEqual(posts(bee).map(p => p.params.daystamp), ['20261002'])
 }, TOKYO)
+
+// ------------------------------------------------------ starting up (2026-11-04)
+
+// Have each page the page goes to note, as it finishes loading, in
+// window.atload, what its app manifest calls it (see manifest in script.js),
+// and what the big button says, which TallyBee shows last of all as it starts,
+// with all its controls working by then
+const atload = page => page.addInitScript(() => addEventListener('load', () => {
+  const l = document.querySelector('link[rel=manifest]')
+  window.atload = [l && JSON.parse(decodeURIComponent(l.href.split(',')[1])).name,
+                   document.getElementById('count')?.textContent]
+}))
+
+// Replicata: open TallyBee at a goal's URL, in a new window, and reload it.
+// Expectata: each time, the app manifest for that goal, there by the time the
+// page has loaded, for browsers that go by what they find then (see "an app
+// installed right after logging in is for the goal selected"), as well as for
+// Safari, which goes by the first one it finds.
+// Resultata (before): none yet, each time, as script.js added it only after
+// asking whether another TallyBee window was open (see OPEN in script.js).
+qual('the app manifest is there, for the goal, by the time the page has loaded', async page => {
+  await atload(page)
+  await page.goto(APP + '?goal=pushups')
+  assert.equal((await page.evaluate(() => window.atload))[0], 'pushups')
+  await see(page, '#count', /./)
+  await page.reload()
+  assert.equal((await page.evaluate(() => window.atload))[0], 'pushups')
+})
+
+// Replicata: log in, and tap 3; reload TallyBee; pick pages (an odometer goal
+// at 120).
+// Expectata: each time, TallyBee all working by the time the page has loaded,
+// with the big number showing, 3, and then 123, as a window with a count of its
+// own has nothing to wait for (see OPEN in script.js).
+// Resultata (before): no number yet, and a tap then lost, as each page waited
+// to hear whether another TallyBee window was open, though the answer only
+// matters to a window with no count of its own: on a computer with its CPU
+// slowed 6 times, about 220ms from the page showing till it worked, against
+// about 80ms.
+qual('a reload, or picking a goal, works as soon as the page has loaded', async page => {
+  await atload(page)
+  await login(page)
+  await tap(page, '#bigbut', 3)
+  await page.reload()
+  assert.equal((await page.evaluate(() => window.atload))[1], '3')
+  await choose(page, 'pages')
+  assert.equal((await page.evaluate(() => window.atload))[1], '123')
+})
+
+// Replicata: open TallyBee in a new window, with script.js slow to come, and
+// look at the page; then let it come.
+// Expectata: a blank page, all black, with no number, footer or menu button:
+// just, in the middle, the infinibee, which waits a moment before it shows, so
+// that it doesn't flash on a page that's quick to start; then, once script.js
+// has come, the page, with no infinibee.
+// Resultata (before): a footer of empty and grayed-out controls, and a menu
+// button, none of them working yet, and no infinibee.
+qual('while TallyBee starts, the page is blank but for the infinibee', async page => {
+  const [shut, open] = gate()
+  await page.context().route(APP + 'script.js', async r => { await shut; return serve(r) })
+  await page.goto(APP, { waitUntil: 'commit' })
+  await page.locator('#infinibee').waitFor()
+  for (const sel of ['#footer', '#menubut'])
+    assert.ok(!await page.isVisible(sel), sel)
+  assert.equal(await page.textContent('#count'), '')
+  const b = await box(page, '#infinibee')
+  assert.ok(Math.abs(b.y + b.height / 2 - PHONE.height / 2) < 16 &&
+            Math.abs(b.x + b.width / 2 - PHONE.width / 2) < 1, JSON.stringify(b))
+  assert.deepEqual(await page.$eval('#infinibee', e => {
+    const a = e.getAnimations().find(x => x.animationName === 'appear')
+    a.pause()
+    return [100, 200].map(ms => { a.currentTime = ms
+                                  return getComputedStyle(e).opacity })
+  }), ['0', '1'])
+  open()
+  await see(page, '#count', '0')
+  for (const sel of ['#footer', '#menubut'])
+    assert.ok(await page.isVisible(sel), sel)
+  assert.ok(!await page.isVisible('#infinibee'))
+})
+
+// Replicata: open TallyBee, with what it remembers broken (by a bug, say), so
+// that it fails while starting, before it has shown anything.
+// Expectata: the error, in plain view, and no infinibee.
+// Resultata (in a mutant that left showing the page to render, which can't run
+// then): the infinibee flying forever, the error out of sight.
+qual('an error while TallyBee starts shows, rather than the infinibee', async (page, bee) => {
+  await page.goto(APP)
+  await see(page, '#status', /^Error: .*"count":3/)
+  await expectError(page, bee, /"count":3/)
+  await expectError(page, bee, /before initialization/)
+  assert.ok(await page.isVisible('#status'))
+  assert.ok(!await page.isVisible('#infinibee'))
+}, older({ count: 3 }))
+
+// Replicata: open TallyBee while a file of its script can't be had (a 404, as
+// can happen while TallyBee is being published).
+// Expectata: an error, in plain view, in words, and no infinibee.
+// Resultata (in a mutant with nothing on the script's onerror): the infinibee
+// flying forever.
+for (const file of ['script.js', 'beeminder.js'])
+  qual(`if ${file} can't load, TallyBee says so, rather than showing the infinibee`, async page => {
+    await page.context().route(APP + file, r => r.fulfill({ status: 404, body: 'Not found' }))
+    await page.goto(APP)
+    await see(page, '#status', /^Error: \p{L}{2,}/u)
+    assert.equal(await page.getAttribute('#status', 'data-kind'), 'err')
+    assert.ok(await page.isVisible('#status'))
+    assert.ok(!await page.isVisible('#infinibee'))
+  })
