@@ -12,9 +12,16 @@
 const CACHE = 'tallybee'
 
 // What TallyBee needs to open, fetched and kept as soon as this is installed,
-// since it only starts answering for TallyBee the next time TallyBee opens
-const FILES = ['./', 'style.css', 'script.js', 'beeminder.js', 'infinibee.svg',
-               'icon-192.png', 'apple-touch-icon.png']
+// since it only starts answering for TallyBee the next time TallyBee opens:
+// 404.html too, for a goal's page (see NOTFOUND)
+const FILES = ['./', '404.html', 'style.css', 'script.js', 'beeminder.js',
+               'infinibee.svg', 'icon-192.png', 'apple-touch-icon.png']
+
+// What GitHub Pages answers with, under a 404, for a URL it has no file for,
+// like a goal's page, /alice/pushups/ (see goalurl in script.js): its 404.html,
+// which is TallyBee itself (see index.html). The copy of what came with a 404
+// is kept as 404.html's.
+const NOTFOUND = new URL('404.html', location).href
 
 // Response r as it came from the server, but saying that the page mustn't use
 // it again without asking, so that each time TallyBee loads, each of its
@@ -39,12 +46,17 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url)
   url.search = ''
   e.respondWith(fetch(e.request, { cache: 'no-cache' }).then(r => {
-    // Errors, like a 404, as they come, with no copy kept
-    if (!r.ok) return r
-    // A copy of each file as it comes. (The copy is taken before the page
-    // starts reading r, after which it can't be.)
+    // Errors other than a 404, like a 500, as they come, with no copy kept
+    if (!r.ok && r.status !== 404) return r
+    // A copy of each file as it comes, and of a 404, as 404.html's (see
+    // NOTFOUND), rather than as that of the file it came for, which may be
+    // there after all, as when a 404 comes for a script while TallyBee is being
+    // published. (The copy is taken before the page starts reading r, after
+    // which it can't be.)
     const copy = r.clone()
-    e.waitUntil(caches.open(CACHE).then(c => c.put(url.href, copy)))
+    e.waitUntil(caches.open(CACHE).then(c => c.put(r.ok ? url.href : NOTFOUND, copy)))
     return unkept(r)
-  }, () => caches.match(url.href)))
+  // With no connection, the copy of the file, or, for a URL of no file, like a
+  // goal's page, the copy of 404.html, as GitHub Pages answers then
+  }, () => caches.match(url.href).then(c => c ?? caches.match(NOTFOUND))))
 })

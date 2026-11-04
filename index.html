@@ -2,6 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- TallyBee's pages are at more URLs than its own, tallybee.beeminder.com/:
+     each goal's too, like tallybee.beeminder.com/alice/pushups/ (see goalurl
+     in script.js), which GitHub Pages has no file for, and so serves its
+     404.html for, which is this file, byte for byte (after any change here:
+     cp index.html 404.html). So the files the page names, like style.css, are
+     all at TallyBee's own URL, wherever the page is. -->
+<base href="/">
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>TallyBee</title>
 <!-- <link rel="stylesheet" href="https://latex.now.sh/style.css"> -->

@@ -24,7 +24,11 @@ const redirectUri = location.origin + '/'
 // localStorage.getItem('beeminder-token') says, and on the copy, paste it into
 // localStorage.setItem('beeminder-token', ...) and reload. (Beeminder keeps one
 // token per app, so it's the same login in both: the copy's Submit sends
-// datapoints to your real goals.)
+// datapoints to your real goals.) A goal's page on the copy, like
+// http://localhost:8000/alice/pushups/, which the copy goes to once the goals
+// load, comes only from a server that answers a URL it has no file for with
+// 404.html, as GitHub Pages does (see index.html), which Python's doesn't: on
+// it, reloading a goal's page shows Python's own 404 page.
 
 // Show any error, like Beeminder being unreachable or rejecting our token or an
 // assert failing, in the status line. (One from a script from another site,
@@ -182,38 +186,101 @@ function edited(keys, f) {
   })
 }
 
-// This page's goal: the one its URL names, else the one selected last (or, the
-// first time, till the goals load, none)
-let slug = new URLSearchParams(location.search).get('goal') ?? load().slug
+// The user, from Beeminder, once the goals have loaded (see loadGoals); till
+// then, a stand-in with no timezone, which, for what day it is (see daystamp),
+// means the device's
+const NOUSER = { username: '', timezone: undefined }
 
-// The URL of TallyBee with goal s selected, like
-// tallybee.beeminder.com/?goal=pushups, or with no goal named if s is null.
-// Picking a goal in the dropdown loads its URL, and the page puts its goal in
-// its URL once the goals load, so a bookmark made from the page opens that goal,
-// and so does a home-screen icon, if made from a page loaded at its goal's URL.
-// (One made from a page loaded at a URL that names no goal, like TallyBee's own,
-// opens whichever goal was selected last.)
-const goalurl = s =>
-  location.pathname + (s === null ? '' : '?' + new URLSearchParams({ goal: s }))
+// Throw unless gs is a list of goals, and u a user, as TallyBee needs them from
+// Beeminder (see NOGOAL and NOUSER); else return them, as { goals, user }
+function goalscheck(gs, u) {
+  gs.forEach(({ slug, kyoom, safesum, queued, deadline }) => beeminder.assert(
+    typeof slug === 'string' && typeof kyoom === 'boolean' &&
+    typeof safesum === 'string' && typeof queued === 'boolean' &&
+    Number.isFinite(deadline),
+    JSON.stringify({ slug, kyoom, safesum, queued, deadline })))
+  beeminder.assert(typeof u.username === 'string' && typeof u.timezone === 'string',
+                   JSON.stringify({ username: u.username, timezone: u.timezone }))
+  return { goals: gs, user: u }
+}
+
+// The user's goals, and the user, as they last loaded from Beeminder (see
+// loadGoals). Each tab keeps them, in its sessionStorage, for as long as the
+// same user is logged in, so that a page loading there, as for another goal,
+// shows them from the start, till they load again: an odometer-like goal's
+// reading, say, rather than the count with no goal to build on. Otherwise,
+// till they load, there are none, and the stand-in for the user. (The tab's
+// own sessionStorage, unlike localStorage, sets off no other window: see the
+// storage listener.)
+const kept = JSON.parse(sessionStorage.getItem('tallybee-goals')) ?? { user: NOUSER }
+let { goals, user } = kept.user.username === beeminder.getUsername()
+  ? goalscheck(kept.goals, kept.user) : { goals: [], user: NOUSER }
+
+// The paths of TallyBee's pages: TallyBee's own, /, which names no goal (or
+// /index.html, which GitHub Pages serves index.html at too); and each goal's,
+// its user's name and its slug, as on Beeminder's own site, like
+// /alice/pushups/ (see goalurl), with or without the slash at the end, as
+// Beeminder's own URLs have none. GitHub Pages has no file for a goal's page,
+// and so serves its 404.html, which is TallyBee itself (see index.html).
+const PATHS = /^\/(?:index\.html|(?<user>[^/]+)\/(?<slug>[^/]+)\/?)?$/
+// What this page's URL names, as PATHS reads its path
+const named = location.pathname.match(PATHS)
+// the error for a URL of TallyBee's that's none of its pages (see
+// PATHS), like tallybee.beeminder.com/alice, naming its path, like: TallyBee
+// has no page at "/alice" (conceptually but not technically a 404)
+beeminder.assert(named !== null, `TallyBee 404 error: "${location.pathname}"`)
+
+// Whose goal this page is for, by name: the user its URL names, else (as at
+// TallyBee's own URL) u, the user logged in, as Beeminder has it (see user)
+const owner = u => named.groups.user ?? u.username
+
+// This page's goal, by its slug: the one its URL names; else the one its URL
+// names as TallyBee's URLs did before 2026-11-04, as old links and home-screen
+// icons still do, like tallybee.beeminder.com/?goal=pushups, for whoever's
+// logged in; else the one selected last (or, the first time, till the goals
+// load, none)
+let slug = named.groups.slug ?? new URLSearchParams(location.search).get('goal') ??
+  load().slug
+
+// The URL of TallyBee, as a path, for user u's goal s: its user's name and its
+// slug, as on Beeminder's own site, but with a slash at the end (see
+// manifest), like /alice/pushups/, for tallybee.beeminder.com/alice/pushups/.
+// With no telling whose, as when logged out at TallyBee's own URL, it's as
+// TallyBee's URLs were before 2026-11-04, like /?goal=pushups; and with no
+// goal, TallyBee's own, /. Picking a goal in the dropdown loads its URL, and
+// the page puts its goal in its URL once the goals load, so a bookmark made
+// from the page opens that goal, and so does a home-screen icon, if made from
+// a page loaded at its goal's URL. (One made from a page loaded at a URL that
+// names no goal, like TallyBee's own, opens whichever goal was selected last.)
+const goalurl = (u, s) => s === null ? '/' :
+  u ? `/${u}/${s}/` : '/?' + new URLSearchParams({ goal: s })
 
 // The page's app manifest, which is what makes TallyBee installable as an app,
 // for this page's goal: an app installed from the page (or a home-screen icon
 // added from it) is named for the goal, and opens it. With no goal, it's named
-// TallyBee, like the page, and opens TallyBee's own URL. It's a data: URL, made
-// afresh when the page's goal changes (see loadGoals), so its URLs are
-// absolute, as a data: URL is no base for relative ones.
+// TallyBee, like the page, and opens TallyBee's own URL. An app is for the URLs
+// within its scope, those whose path starts with its scope's, and Chrome on
+// Android offers to install a page as an app only if no app it has installed
+// is for the page's URL. So each goal's app has the goal's own URL as its
+// scope, so that each goal can have an app of its own, rather than TallyBee's
+// own URL, /, that of every page of TallyBee's, as all apps from TallyBee had
+// before 2026-11-04; and that URL ends in a slash, so that an app for a goal
+// called push, say, isn't for pushups' URL too. It's a data: URL, made afresh
+// when the page's goal changes (see loadGoals), so its URLs are absolute, as a
+// data: URL is no base for relative ones.
 function manifest() {
-  const url = u => new URL(u, location.href).href
+  const url = u => new URL(u, document.baseURI).href
   const icon = (src, sizes, purpose) => ({ src: url(src), sizes, purpose,
                                            type: 'image/png' })
   const name = slug ?? document.title
+  const here = url(goalurl(owner(user), slug))
   return 'data:application/manifest+json,' + encodeURIComponent(JSON.stringify({
     name,
     short_name: name, // what Android shows under the icon
     description: document.querySelector('meta[name=description]').content,
-    id: url(goalurl(slug)),
-    start_url: url(goalurl(slug)),
-    scope: url('/'),
+    id: here,
+    start_url: here,
+    scope: here,
     display: 'standalone',
     background_color: '#000000',
     theme_color: document.querySelector('meta[name=theme-color]').content,
@@ -280,37 +347,11 @@ const value = (g, t) => add(t.count, pinned(g, t).base)
 // negative, before it).
 const NOGOAL = { slug: '', kyoom: true, safesum: '', queued: false, deadline: 0,
                  last_datapoint: null }
-const goal = () => goals.find(g => g.slug === slug) ?? NOGOAL
-
-// The user, from Beeminder, once the goals have loaded (see loadGoals); till
-// then, a stand-in with no timezone, which, for what day it is (see daystamp),
-// means the device's
-const NOUSER = { username: '', timezone: undefined }
-
-// Throw unless gs is a list of goals, and u a user, as TallyBee needs them from
-// Beeminder (see NOGOAL and NOUSER); else return them, as { goals, user }
-function goalscheck(gs, u) {
-  gs.forEach(({ slug, kyoom, safesum, queued, deadline }) => beeminder.assert(
-    typeof slug === 'string' && typeof kyoom === 'boolean' &&
-    typeof safesum === 'string' && typeof queued === 'boolean' &&
-    Number.isFinite(deadline),
-    JSON.stringify({ slug, kyoom, safesum, queued, deadline })))
-  beeminder.assert(typeof u.username === 'string' && typeof u.timezone === 'string',
-                   JSON.stringify({ username: u.username, timezone: u.timezone }))
-  return { goals: gs, user: u }
-}
-
-// The user's goals, and the user, as they last loaded from Beeminder (see
-// loadGoals). Each tab keeps them, in its sessionStorage, for as long as the
-// same user is logged in, so that a page loading there, as for another goal,
-// shows them from the start, till they load again: an odometer-like goal's
-// reading, say, rather than the count with no goal to build on. Otherwise,
-// till they load, there are none, and the stand-in for the user. (The tab's
-// own sessionStorage, unlike localStorage, sets off no other window: see the
-// storage listener.)
-const kept = JSON.parse(sessionStorage.getItem('tallybee-goals')) ?? { user: NOUSER }
-let { goals, user } = kept.user.username === beeminder.getUsername()
-  ? goalscheck(kept.goals, kept.user) : { goals: [], user: NOUSER }
+// This page's goal among goals gs, the goals of user u, if this page's goal is
+// u's (see owner); else NOGOAL
+const goalof = (gs, u) =>
+  gs.find(g => g.slug === slug && owner(u) === u.username) ?? NOGOAL
+const goal = () => goalof(goals, user)
 
 // The daystamp of the day it is now for goal g, as Beeminder counts days: in
 // the user's timezone, with each day ending at g's deadline. (From the date's
@@ -488,18 +529,19 @@ function poll() {
   if (goal().queued) polltimer = setTimeout(refresh, 2000)
 }
 
-// Put the goals in the dropdown, selecting this page's goal
+// Put the goals in the dropdown, selecting this page's goal, if it's one of
+// them (see goalof)
 function dropdown() {
   $('goals').replaceChildren(...goals.map(g => new Option(g.slug)))
-  $('goals').value = slug
+  $('goals').value = goal().slug
 }
 
 // Get the user's goals, and the user, from Beeminder, keep them (see goals),
 // and put the goals in the dropdown, selecting this page's goal, or, the first
 // time, the most urgent one, and put it in the URL (see goalurl). Then poll.
-// If this page's goal is none of the user's (like from a typo in a link, or a
-// link to a goal since renamed), then, with no goal selected (see NOGOAL), say
-// so.
+// If this page's goal is none of the user's (like from a typo in a link, a
+// link to a goal since renamed, or a link to someone else's goal), then, with
+// no goal selected (see NOGOAL), say so.
 async function loadGoals() {
   const [gs, u] = await Promise.all([beeminder.getGoals(), beeminder.getUser()])
   goalscheck(gs, u)
@@ -507,7 +549,7 @@ async function loadGoals() {
   // The goal's last datapoint, for the base of an odometer-like goal (see
   // livebase), and to show (see render), is the datapoint added to it last,
   // which isn't always the one Beeminder calls last_datapoint
-  const g = gs.find(g => g.slug === slug) ?? NOGOAL
+  const g = goalof(gs, u)
   if (g !== NOGOAL) g.last_datapoint = await beeminder.getLastAdded(g.slug) ?? null
   if (g.last_datapoint !== null) dpcheck(g.last_datapoint)
   // Everything's here now, so show it all at once. The goals that first
@@ -518,12 +560,12 @@ async function loadGoals() {
   if (unknown) today = daystamp(goal())
   sessionStorage.setItem('tallybee-goals', JSON.stringify({ goals, user }))
   dropdown()
-  history.replaceState(null, '', goalurl(slug))
+  history.replaceState(null, '', goalurl(owner(user), slug))
   $('manifest').href = manifest()
   update(t => { t.slug = slug })
   poll()
   beeminder.assert(slug === null || g !== NOGOAL,
-                   `No such goal: "${slug}"`)
+                   `No such goal: "${owner(user)}/${slug}"`)
 }
 
 // What a datapoint's comment says when none is typed, as Beedroid's tally
@@ -697,7 +739,7 @@ $('goals').addEventListener('change', () => {
   busy = true
   render()
   $('menu').close()
-  location.replace(goalurl($('goals').value))
+  location.replace(goalurl(user.username, $('goals').value))
 })
 // Login button's label (logged in, it's hidden: see render).
 // graph.beeminder.com's login button says "Log in with your Beeminder
@@ -772,7 +814,7 @@ update(t => { t.slug = slug }) // this page's goal is now the one selected last
 // was an access token, which means loading the page again (see autoLogin).
 let reloading = false
 try {
-  reloading = beeminder.autoLogin(goalurl(slug))
+  reloading = beeminder.autoLogin(goalurl(owner(user), slug))
 } finally {
   if (!reloading) refresh()
 }

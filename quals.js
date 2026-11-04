@@ -156,13 +156,21 @@ function qual(name, f, opts = {}) {
 }
 
 // Serve the file from this directory that the request is for, like GitHub
-// Pages does, including a 404 for no such file
+// Pages does, including, for no such file, a 404, with GitHub Pages' answer
+// then, 404.html, which is TallyBee itself, as for a goal's page, like
+// tallybee.beeminder.com/alice/pushups/ (see goalurl in script.js)
+// SPEC CHANGE (paths, 2026-11-04): for no such file, a 404 that said "Not
+// found"
 function serve(route) {
   const path = fileURLToPath(new URL('.' + new URL(route.request().url())
     .pathname.replace(/\/$/, '/index.html'), import.meta.url))
   return existsSync(path) ? route.fulfill({ path })
-                          : route.fulfill({ status: 404, body: 'Not found' })
+                          : route.fulfill({ status: 404, path: NOTFOUND })
 }
+
+// What GitHub Pages serves, under a 404, for a URL it has no file for (see
+// serve)
+const NOTFOUND = fileURLToPath(new URL('404.html', import.meta.url))
 
 async function fakeBeeminder(bee, route) {
   const req = route.request()
@@ -266,13 +274,19 @@ async function login(page, username = 'alice', token = TOKEN) {
 const denied = state => `${APP}?` + new URLSearchParams({ error: 'access_denied',
   error_description: 'The user denied you access', state })
 
+// The URL of alice's goal slug, its user's name and its slug, as on
+// Beeminder's own site, but with a slash at the end (see goalurl in
+// script.js), like tallybee.beeminder.com/alice/pushups/
+const alice = slug => `${APP}alice/${slug}/`
+
 // Pick goal slug in the dropdown, in the menu, which loads that goal's URL, and
 // wait for the goals to load there
 // SPEC CHANGE (menu, 2026-10-08): the dropdown is in the menu
+// SPEC CHANGE (paths, 2026-11-04): the goal's URL was ?goal=slug
 async function choose(page, slug) {
   await menu(page)
   await page.selectOption('#goals', slug)
-  await page.waitForURL(`${APP}?goal=${slug}`)
+  await page.waitForURL(alice(slug))
   await see(page, '#goals', /pushups/)
   assert.equal(await page.inputValue('#goals'), slug)
 }
@@ -457,15 +471,19 @@ async function appManifest(page) {
 // and call f with its URL, then stop serving. (Unlike the routes that the
 // other quals use, this lets a service worker work, and Chrome let a page be
 // installed as an app.)
+// SPEC CHANGE (paths, 2026-11-04): for no such file, a 404 that said "Not
+// found"; now, as GitHub Pages answers, 404.html, under a 404 (see serve),
+// through edit too
 async function localhost(f, edit = (path, body) => body, headers = {}) {
   const types = { '.html': 'text/html', '.js': 'text/javascript',
                   '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml' }
   const server = createServer((req, res) => {
     const path = join(fileURLToPath(new URL('.', import.meta.url)),
                       new URL(req.url, 'http://x').pathname.replace(/\/$/, '/index.html'))
+    const file = existsSync(path) ? path : NOTFOUND
     res.writeHead(existsSync(path) ? 200 : 404,
-                  { 'content-type': types[extname(path)] ?? 'text/plain', ...headers })
-    res.end(existsSync(path) ? edit(path, readFileSync(path)) : 'Not found')
+                  { 'content-type': types[extname(file)] ?? 'text/plain', ...headers })
+    res.end(edit(file, readFileSync(file)))
   })
   // to this computer only, not to others on its network
   await new Promise(r => server.listen(0, 'localhost', r))
@@ -640,9 +658,10 @@ qual('the redirect back from Beeminder logs you in, for good', async (page, bee)
 // the page would open: TallyBee loads itself again without it.
 // Resultata (in a mutant that only took the token out of the address bar): the
 // page as loaded from the URL with the token in it.
+// SPEC CHANGE (paths, 2026-11-04): the goal's URL was ?goal=pushups
 qual('logging in loads the page again without the access token in the URL', async page => {
   await login(page)
-  assert.equal(page.url(), APP + '?goal=pushups')
+  assert.equal(page.url(), alice('pushups'))
   assert.equal(await page.evaluate(() =>
     performance.getEntriesByType('navigation')[0].name), APP)
 })
@@ -854,7 +873,8 @@ qual("logged in, the username heads the top line, and there's no login button", 
   const n = await box(page, '#goalname')
   await page.touchscreen.tap(n.x + 4, n.y + n.height / 2)
   await see(page, '#bigbut', '1')
-  assert.equal(page.url(), APP + '?goal=pushups')
+  // SPEC CHANGE (paths, 2026-11-04): the goal's URL was ?goal=pushups
+  assert.equal(page.url(), alice('pushups'))
   assert.equal(bee.authorizes.length, 1)
   await page.goto(APP + '?goal=nosuchgoal')
   await expectError(page, bee, /nosuchgoal/)
@@ -3712,7 +3732,7 @@ qual('picking a goal shows no number in between', async (page, bee) => {
   bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
   await menu(page) // SPEC CHANGE (menu, 2026-10-08): the dropdown is in the menu
   await page.selectOption('#goals', 'pages')
-  await page.waitForURL(APP + '?goal=pages')
+  await page.waitForURL(alice('pages')) // SPEC CHANGE (paths, 2026-11-04): was ?goal=pages
   await see(page, '#bigbut', '123')
   open()
   await settled(page)
@@ -3741,7 +3761,7 @@ qual('picking a goal shows the infinibee, and grays out the footer, till it come
   }, ids)
   assert.deepEqual(seen, [false, true, ...ids.map(() => true)],
                    JSON.stringify(['menu', 'infinibee', ...ids]))
-  await page.waitForURL(APP + '?goal=pages')
+  await page.waitForURL(alice('pages')) // SPEC CHANGE (paths, 2026-11-04): was ?goal=pages
   await see(page, '#safesum', 'safe for 3 days')
   assert.ok(!await page.isVisible('#infinibee'))
 })
@@ -3790,32 +3810,58 @@ qual('a link to a goal, like tallybee.beeminder.com/?goal=pages, selects it', as
   assert.equal(await page.inputValue('#goals'), 'pages')
 })
 
+// Replicata: log in, which selects pushups; then open a link to pages: its URL,
+// tallybee.beeminder.com/alice/pages/, its user's name and its slug, as on
+// Beeminder's own site, beeminder.com/alice/pages; or that with no slash at
+// the end, as Beeminder's has none; or a link from before goals' URLs were
+// that (2026-11-04), like an old bookmark or home-screen icon, ?goal=pages.
+// Expectata: pages, at its URL, with the slash, which is the URL an app
+// installed from the page opens (see "each goal's app is for that goal's URLs
+// alone").
+// Resultata (before): GitHub Pages' "404 File not found", for the first two;
+// and pages, but at ?goal=pages, for the last.
+for (const link of ['alice/pages/', 'alice/pages', '?goal=pages'])
+  qual(`a link to a goal, like ${link}, selects it, at its URL`, async page => {
+    await login(page)
+    await page.goto(APP + link)
+    await see(page, '#safesum', 'safe for 3 days')
+    assert.equal(await page.inputValue('#goals'), 'pages')
+    await page.waitForURL(alice('pages'))
+  })
+
 // Replicata: pick pages in the dropdown.
-// Expectata: TallyBee at tallybee.beeminder.com/?goal=pages, and loaded from
+// Expectata: TallyBee at tallybee.beeminder.com/alice/pages/, and loaded from
 // that URL, so that a bookmark, or an app installed from the page, opens
 // pages.
 // Resultata (in a mutant that only changed the URL in the address bar): the
 // page as loaded from tallybee.beeminder.com/, which names no goal.
+// SPEC CHANGE (paths, 2026-11-04): the goal's URL was ?goal=pages
 qual('picking a goal puts it in the URL, for bookmarks and home-screen icons', async page => {
   await login(page)
   await choose(page, 'pages')
-  assert.equal(page.url(), APP + '?goal=pages')
+  assert.equal(page.url(), alice('pages'))
   // The page was loaded from that URL, so an app installed from it opens it
   assert.equal(await page.evaluate(() =>
-    performance.getEntriesByType('navigation')[0].name), APP + '?goal=pages')
+    performance.getEntriesByType('navigation')[0].name), alice('pages'))
 })
 
-// Replicata: logged out, open tallybee.beeminder.com/?goal=pages, and log in
-// (Beeminder sends you back to TallyBee's plain URL).
-// Expectata: pages, selected, and in the URL.
+// Replicata: logged out, open a link to pages, tallybee.beeminder.com/alice/pages/
+// (or one from before goals' URLs were that, ?goal=pages), and log in, which
+// sends you to Beeminder, which sends you back to TallyBee's own URL, as it
+// does for every login to TallyBee.
+// Expectata: pages, selected, at its URL.
 // Resultata (in a mutant that remembered a page's goal only once the goals had
 // loaded): pushups, the goal from the link forgotten on the way to Beeminder.
-qual('a link to a goal survives logging in', async page => {
-  await page.goto(APP + '?goal=pages')
-  await login(page) // Beeminder sends us back to the URL without the goal
-  await see(page, '#safesum', 'safe for 3 days')
-  assert.equal(page.url(), APP + '?goal=pages')
-})
+// SPEC CHANGE (paths, 2026-11-04): this was for ?goal=pages alone, which it
+// came back to
+for (const link of ['alice/pages/', '?goal=pages'])
+  qual(`a link to a goal survives logging in (${link})`, async (page, bee) => {
+    await page.goto(APP + link)
+    await login(page) // Beeminder sends us back to the URL without the goal
+    await see(page, '#safesum', 'safe for 3 days')
+    await page.waitForURL(alice('pages'))
+    assert.equal(new URL(bee.authorizes[0]).searchParams.get('redirect_uri'), APP)
+  })
 
 // Replicata: log in at tallybee.beeminder.com (which selects pushups), open
 // ?goal=pages in another tab, then reload the first tab, as phones do to tabs
@@ -3825,7 +3871,8 @@ qual('a link to a goal survives logging in', async page => {
 // last, since the first tab's URL named no goal.
 qual('a page keeps its goal when reloaded, whatever other tabs select', async page => {
   await login(page)
-  assert.equal(page.url(), APP + '?goal=pushups')
+  // SPEC CHANGE (paths, 2026-11-04): the goal's URL was ?goal=pushups
+  assert.equal(page.url(), alice('pushups'))
   const w = await window2(page, APP + '?goal=pages')
   await see(w, '#safesum', 'safe for 3 days')
   await page.bringToFront()
@@ -3853,6 +3900,60 @@ qual('a link to a goal you do not have selects no goal, and fails loudly', async
   assert.ok(await disabled(page, '#subbut'))
 })
 
+// Replicata: logged in as alice, open the URL of a goal she doesn't have: one
+// of someone else's, tallybee.beeminder.com/bob/pushups/ (though she has a
+// pushups of her own), or one of hers by a name she has no goal by,
+// alice/nosuchgoal/ (as from a home-screen icon for a goal since renamed).
+// Expectata: no goal selected, rather than one that a count could get
+// submitted to by mistake, like her own pushups for bob's, and an error naming
+// the goal as the URL does, like "bob/pushups"; and the URL left as it is.
+// Resultata (in a mutant that went by the goal's slug alone): alice's pushups,
+// selected, at bob/pushups/.
+for (const name of ['bob/pushups', 'alice/nosuchgoal'])
+  qual(`the URL of a goal you do not have, like ${name}/, selects no goal, and fails loudly`, async (page, bee) => {
+    await login(page)
+    await page.goto(`${APP}${name}/`)
+    await see(page, '#status', new RegExp(`^Error: .*"${name}"`))
+    await expectError(page, bee, new RegExp(name))
+    await see(page, '#goals', /pushups/)
+    assert.equal(await page.inputValue('#goals'), '')
+    await tap(page, '#bigbut')
+    assert.ok(await disabled(page, '#subbut'))
+    assert.equal(page.url(), `${APP}${name}/`)
+  })
+
+// Replicata: open a URL of TallyBee's that names no goal the way goals' URLs
+// do, like tallybee.beeminder.com/alice, a user's name alone, which GitHub Pages
+// serves its 404.html for, as for a goal's page.
+// Expectata: an error, naming the URL's path, rather than some goal's page.
+// Resultata (in a mutant that took a URL it couldn't read for TallyBee's own):
+// the goal selected last, with no error.
+for (const path of ['alice', 'alice/pushups/more'])
+  qual(`a URL of TallyBee's that is no page of it, like /${path}, fails loudly`, async (page, bee) => {
+    await page.goto(APP + path)
+    await see(page, '#status', new RegExp(`^Error: .*"/${path}"`))
+    await expectError(page, bee, new RegExp(`"/${path}"`))
+    // (as for any error while TallyBee starts: see "an error while TallyBee
+    // starts shows, rather than the infinibee")
+    await expectError(page, bee, /before initialization/)
+  })
+
+// Replicata: logged in, open tallybee.beeminder.com/index.html, which GitHub
+// Pages serves index.html at, as at tallybee.beeminder.com/ (and which VS
+// Code's Live Server opens a copy of TallyBee at), and tap.
+// Expectata: TallyBee, as at its own URL: counting, and, once the goals load,
+// at the goal's URL.
+// Resultata (in a draft of this build, whose only paths were / and goals'):
+// the error 'TallyBee non habet paginam "/index.html"', and TallyBee not
+// started.
+qual('TallyBee at /index.html is TallyBee at its own URL', async page => {
+  await login(page)
+  await page.goto(APP + 'index.html')
+  await tap(page, '#bigbut')
+  assert.equal(await count(page), 1)
+  await page.waitForURL(alice('pushups'))
+})
+
 // Replicata: open TallyBee at a goal's URL, like ?goal=pages, and install it
 // as an app (or add it to the home screen).
 // Expectata: an app named for the goal, "pages", that opens pages.
@@ -3862,6 +3963,66 @@ qual("an app installed from a goal's page is named for the goal, and opens it", 
   const { json, parsed } = await appManifest(page)
   assert.deepEqual([parsed.name, json.short_name, parsed.startUrl, parsed.id],
                    ['pages', 'pages', APP + '?goal=pages', APP + '?goal=pages'])
+})
+
+// Replicata: open TallyBee at a goal's URL, tallybee.beeminder.com/alice/pages/,
+// and install it as an app; then do the same for another goal, pushups.
+// Expectata: an app for each, named for its goal, opening its goal's URL, and
+// with that URL as its scope, the URLs it's for. So the app for pages isn't for
+// pushups' URL, and Chrome on Android, which offers to install a page as an app
+// only if no app it has installed is for the page's URL (see
+// WebappRegistry.isAppInstalledForUrl in Chromium), offers to install pushups'
+// too. (Chrome counts a URL as within a scope if its path starts with the
+// scope's, so the slash at the end keeps an app for a goal called push from
+// being for pushups' URL, as it would be with a scope of /alice/push. The
+// owner OK'd the slash, 2026-11-04: "keeping the slash sounds fine".)
+// Resultata (before): every goal's app had the same scope, TallyBee's own URL,
+// which every URL of TallyBee's is within, so that Chrome on Android said of
+// every goal's page but the first one installed that it was installed already.
+qual("each goal's app is for that goal's URLs alone", async page => {
+  for (const slug of ['pages', 'pushups']) {
+    await page.goto(alice(slug))
+    const { json, parsed } = await appManifest(page)
+    assert.deepEqual([parsed.name, json.short_name, parsed.startUrl, parsed.id, parsed.scope],
+                     [slug, slug, alice(slug), alice(slug), alice(slug)])
+  }
+})
+
+// Replicata: open a goal's page, tallybee.beeminder.com/alice/pushups/, which
+// GitHub Pages has no file for, and so serves its 404.html for, under a 404;
+// look at it, tap, and fetch every file of TallyBee's that it names: its
+// style, its icons, the infinibee, and the sourcery, in the help.
+// Expectata: TallyBee, styled, counting, and every one of those files there,
+// from TallyBee's own URL, wherever the page is.
+// Resultata (in a mutant without index.html's <base href="/">): the page
+// unstyled, as its style.css, named for the page's own URL, as
+// tallybee.beeminder.com/alice/pushups/style.css, came as GitHub Pages'
+// 404.html.
+qual("a goal's page comes whole, though GitHub Pages serves it as its 404 page", async page => {
+  assert.equal((await page.goto(alice('pushups'))).status(), 404)
+  await tap(page, '#bigbut')
+  assert.equal(await count(page), 1)
+  const { height } = await box(page, '#bigbut') // styled: most of the screen
+  assert.ok(height > PHONE.height / 2, `the big button is ${height}px tall`)
+  const urls = (await page.evaluate(() => [
+    ...[...document.querySelectorAll('link[href], a[href]')].map(e => e.href),
+    new URL(document.querySelector('#infinibee image').getAttribute('href'),
+            document.baseURI).href])).filter(u => u.startsWith(APP))
+  assert.ok(urls.length >= 6, JSON.stringify(urls))
+  for (const u of urls) assert.equal(await status(page, u), 200, u)
+})
+
+// Replicata: compare 404.html with index.html.
+// Expectata: the same, byte for byte. GitHub Pages serves 404.html for any URL
+// it has no file for, like a goal's, tallybee.beeminder.com/alice/pushups/, and
+// that has to be TallyBee itself, just as at TallyBee's own URL. (After any
+// change to index.html: cp index.html 404.html.)
+// Resultata (before 2026-11-04): no 404.html, so that GitHub Pages served its
+// own "404 File not found" for any such URL.
+test('404.html is index.html, byte for byte', () => {
+  const file = f => readFileSync(fileURLToPath(new URL(f, import.meta.url)))
+  assert.ok(existsSync(NOTFOUND) && file('404.html').equals(file('index.html')),
+            'after any change to index.html: cp index.html 404.html')
 })
 
 // Replicata: log in for the first time, which loads TallyBee at its plain URL
@@ -3881,10 +4042,11 @@ qual('an app installed right after logging in is for the goal selected', async (
   await appManifest(page) // as Chrome on Android does when the page loads
   open()
   await see(page, '#goals', /pushups/)
-  assert.equal(page.url(), APP + '?goal=pushups')
+  // SPEC CHANGE (paths, 2026-11-04): the goal's URL was ?goal=pushups
+  assert.equal(page.url(), alice('pushups'))
   const { json, parsed } = await appManifest(page)
   assert.deepEqual([parsed.name, json.short_name, parsed.startUrl, parsed.id],
-                   ['pushups', 'pushups', APP + '?goal=pushups', APP + '?goal=pushups'])
+                   ['pushups', 'pushups', alice('pushups'), alice('pushups')])
 })
 
 // Replicata: open TallyBee, and look for its app manifest: in the HTML as it
@@ -3912,6 +4074,9 @@ qual("the page starts with no app manifest, so that Safari reads its goal's", as
 // use, nor from pages we serve ourselves under someone else's https URL. So
 // this one serves this directory at http://localhost (which Chrome trusts like
 // https) to Chrome with a throwaway ordinary profile.
+// SPEC CHANGE (paths, 2026-11-04): the goal's URL was ?goal=pages, which is
+// TallyBee's own URL, which GitHub Pages serves index.html for; a goal's URL
+// now comes, as GitHub Pages serves it, as 404.html, under a 404
 test('Chrome has no complaint about TallyBee as an app', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'tallybee-quals-'))
   const context = await chromium.launchPersistentContext(dir, { channel: 'chrome' })
@@ -3919,7 +4084,7 @@ test('Chrome has no complaint about TallyBee as an app', async () => {
   try {
     await localhost(async url => {
       const page = await context.newPage()
-      await page.goto(url + '?goal=pages')
+      assert.equal((await page.goto(url + 'alice/pages/')).status(), 404)
       const cdp = await context.newCDPSession(page)
       const { installabilityErrors } = await cdp.send('Page.getInstallabilityErrors')
       assert.deepEqual(installabilityErrors.map(e => e.errorId), [])
@@ -3957,6 +4122,63 @@ test('after one visit, TallyBee opens and counts with no connection', async () =
       const { height } = await box(page, '#bigbut') // styled: most of the screen
       assert.ok(height > PHONE.height / 2, `the big button is ${height}px tall`)
     })
+  } finally { await context.close() }
+})
+
+// Replicata: open a goal's page, tallybee.beeminder.com/alice/pushups/, for the
+// first time; then lose the connection, and open it again.
+// Expectata: it opens, looking as it does online, and counts, from the copy
+// the service worker keeps of what GitHub Pages serves a goal's page as, its
+// 404.html (see sw.js).
+// Resultata (before): the browser's own page saying there's no internet, as
+// the service worker had no copy of the goal's page.
+test("after one visit, a goal's page opens and counts with no connection", async () => {
+  const context = await browser.newContext({ viewport: PHONE, hasTouch: true,
+                                             isMobile: true })
+  await roboto(context)
+  try {
+    await localhost(async url => {
+      const page = await context.newPage()
+      await page.goto(url + 'alice/pushups/')
+      await ready(page)
+      await context.setOffline(true)
+      await page.reload()
+      await tap(page, '#bigbut')
+      assert.equal(await page.textContent('#bigbut'), '1')
+      const { height } = await box(page, '#bigbut') // styled: most of the screen
+      assert.ok(height > PHONE.height / 2, `the big button is ${height}px tall`)
+    })
+  } finally { await context.close() }
+})
+
+// Replicata: open a goal's page, alice/pushups/; a new version of TallyBee gets
+// published; open it again; then lose the connection, and open it once more.
+// Expectata: the new version, page and script both, as the service worker
+// keeps a copy of what GitHub Pages serves a goal's page as, its 404.html, as
+// it comes, as of any file.
+// Resultata (in a mutant of sw.js that kept 404.html only as it was when the
+// service worker got installed): the old page, with the new script.
+test("offline, a goal's page opens the version it last opened online", async () => {
+  let version = 1
+  const context = await browser.newContext()
+  await roboto(context)
+  try {
+    await localhost(async url => {
+      const page = await context.newPage()
+      await page.goto(url + 'alice/pushups/')
+      await ready(page)
+      version = 2
+      await page.reload() // now with the service worker answering
+      assert.equal(await page.title(), 'TallyBee 2')
+      await kept(page, '<title>TallyBee 2</title>')
+      await kept(page, 'window.version = 2')
+      await context.setOffline(true)
+      await page.reload()
+      assert.deepEqual([await page.title(), await page.evaluate(() => window.version)],
+                       ['TallyBee 2', 2])
+    }, (path, body) => /(index|404)\.html$/.test(path)
+      ? String(body).replace('<title>TallyBee</title>', `<title>TallyBee ${version}</title>`)
+      : path.endsWith('script.js') ? `${body}\nwindow.version = ${version}\n` : body)
   } finally { await context.close() }
 })
 
@@ -5476,7 +5698,8 @@ async function edgeTouches(page, sels = '.footer button, .footer select') {
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
     await see(page, '#bigbut', String(++n))
   }
-  assert.equal(page.url(), APP + '?goal=pushups')
+  // SPEC CHANGE (paths, 2026-11-04): the goal's URL was ?goal=pushups
+  assert.equal(page.url(), alice('pushups'))
   assert.ok(!await page.$eval('#info', d => d.open))
   assert.ok(!await menuOpen(page))
 }
@@ -5957,7 +6180,8 @@ qual('unfolded, a touch a little below the big button presses nothing', async pa
   assert.ok(!await menuOpen(page))
   assert.ok(['bigbut', ''].includes(await page.evaluate(() => document.activeElement.id)),
             await page.evaluate(() => document.activeElement.id))
-  assert.equal(page.url(), APP + '?goal=pushups')
+  // SPEC CHANGE (paths, 2026-11-04): the goal's URL was ?goal=pushups
+  assert.equal(page.url(), alice('pushups'))
 })
 
 // ------------------------------------------------------ the menu (2026-10-08)
