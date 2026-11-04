@@ -228,7 +228,7 @@ const named = location.pathname.match(PATHS)
 // the error for a URL of TallyBee's that's none of its pages (see
 // PATHS), like tallybee.beeminder.com/alice, naming its path, like: TallyBee
 // has no page at "/alice" (conceptually but not technically a 404)
-beeminder.assert(named !== null, `TallyBee 404 error: "${location.pathname}"`)
+beeminder.assert(named !== null, `TallyBee 404: "${location.pathname}"`)
 
 // Whose goal this page is for, by name: the user its URL names, else (as at
 // TallyBee's own URL) u, the user logged in, as Beeminder has it (see user)

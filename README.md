@@ -33,6 +33,8 @@ it turns out i don't want wade through all the junk in the non-human section of 
 
 7. How to handle it when the Beeminder deadline passes and it becomes a new day. Probably emulate the Beeminder dashboard: throw up a warning banner but don't tamper with the UI.
 
+8. (Added by Claude, 2026-11-04.) GitHub Pages serves 404.html for goal URLs like tallybee.beeminder.com/alice/pushups/, so for now 404.html is a copy of index.html: `cp index.html 404.html` after every edit to index.html, version bumps included. A qual checks that they match, but only when the quals run. Alternative: have GitHub Pages' Jekyll build make 404.html, which would then be just `---`, `---`, `{% include_relative index.html %}`. That means no manual copying, but it's untested, it depends on GitHub Pages running Jekyll (no .nojekyll file), the quals' file server would have to imitate it, and index.html could never contain `{{` or `{%`.
+
 
 
 ## Closed questions and completed things
