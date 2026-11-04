@@ -94,9 +94,9 @@
      script.js). -->
 <div id="msgline">
 <span id="status" role="status"></span>
-<!-- TODO: what screen readers call the × at the end of a message, which takes
+<!-- what screen readers call the × at the end of a message, which takes
      the message away, like "Dismiss" -->
-<button id="dismiss" aria-label="Dimitte"><svg viewBox="0 0 16 16" width="12"
+<button id="dismiss" aria-label="Dismiss"><svg viewBox="0 0 16 16" width="12"
   height="12" fill="none" stroke="currentColor" stroke-width="2"
   stroke-linecap="round" aria-hidden="true"><path d="M3 3l10 10M13 3L3 13"/></svg></button>
 </div>
@@ -251,13 +251,13 @@ if (ancient_browser_check()) {
 <!-- If script.js, or what it imports, can't be had at all, as with a 404 while
      TallyBee is being published, there's no script.js to take the page out of
      its blank start (see #footer), so this says so. -->
-<!-- TODO: what to say when TallyBee's script can't load, like "TallyBee couldn't
+<!-- what to say when TallyBee's script can't load, like "TallyBee couldn't
      load. Try reloading." -->
 <script type="module" src="script.js" onerror="
   document.getElementById('footer').hidden = false
   document.getElementById('infinibee').hidden = true
   document.getElementById('status').dataset.kind = 'err'
   document.getElementById('status').textContent =
-    'Error: TallyBee onerari non potuit. Renova paginam.'"></script>
+    'Error: TallyBee not loading. Try reloading the page?'"></script>
 </body>
 </html>
