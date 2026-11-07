@@ -333,12 +333,20 @@ async function calls(page, bee, n) {
   assert.equal(bee.calls.length, n, JSON.stringify(bee.calls))
 }
 
-// Wait for TallyBee to be done with all it has queued (see enqueue in
-// script.js), by queuing a turn of its own behind it: the kind of turn that
-// waits for every turn queued before it. After WAIT milliseconds this throws,
-// so that a turn that never ends fails the qual rather than hanging it.
-const settled = page => page.evaluate(wait => navigator.locks.request('tallybee',
-  { mode: 'exclusive', signal: AbortSignal.timeout(wait) }, () => {}), WAIT)
+// Wait for TallyBee, in every window, to be done with all it has queued (see
+// enqueue in script.js), by queuing a turn of its own behind each window's: the
+// kind of turn that waits for every turn queued before it. After WAIT
+// milliseconds this throws, so that a turn that never ends fails the qual
+// rather than hanging it.
+// (Before each window had a lock of its own, 2026-11-06, this queued one turn,
+// under the one lock all windows shared, "tallybee".)
+const settled = page => page.evaluate(async wait => {
+  const { held, pending } = await navigator.locks.query()
+  const locks = new Set([...held, ...pending].map(l => l.name)
+                                             .filter(n => n.startsWith('tallybee ')))
+  await Promise.all([...locks].map(n => navigator.locks.request(n,
+    { mode: 'exclusive', signal: AbortSignal.timeout(wait) }, () => {})))
+}, WAIT)
 
 // Wait till ms milliseconds have gone by on the page's document timeline, the
 // clock that its animations go by
@@ -367,6 +375,29 @@ function gate() {
   let open
   const shut = new Promise(r => { open = r })
   return [shut, open]
+}
+
+// A reply for bee.reply (see qual) that answers the next GET of a goal's
+// datapoints, the last call of a goals load (see LOAD), with what the fake
+// Beeminder had when the call came in, but late: once shut (see gate) resolves
+function late(bee, shut) {
+  let held = false
+  return c => {
+    if (held || c.method !== 'GET' || !c.path.endsWith('/datapoints.json')) return null
+    held = true
+    const answer = structuredClone(defaultReply(bee, c))
+    return shut.then(() => answer)
+  }
+}
+
+// Wait till window w, with a goals load under way, has heard of a datapoint
+// newer than what that load is getting: it says want, the number that datapoint
+// makes it say, or it has asked for a turn to load the goals again, which
+// waits behind the one under way (see enqueue in script.js)
+async function heard(w, want) {
+  assert.ok(await till(w, async () => await w.inputValue('#num') === want ||
+    (await w.evaluate(() => navigator.locks.query())).pending.length > 0),
+    `#num says ${await w.inputValue('#num')}, with no turn waiting`)
 }
 
 // Tap the element matching sel n times, or, with no touchscreen (see DESK),
@@ -450,6 +481,18 @@ async function window2(page, url) {
   const w = await page.context().newPage()
   await w.goto(url)
   return w
+}
+
+// Freeze the page, as Chrome on Android does a page a minute after it goes to
+// the background (Chromium's kStopInBackground): none of its scripts run till
+// it thaws, not even to take a lock the browser has granted it, or to let go
+// of one it holds. (By pausing them in the debugger, since Chrome freezes
+// only pages out of view, which headless Chrome's pages never are: for them,
+// Page.setWebLifecycleState changes nothing.)
+async function freeze(page) {
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Debugger.enable')
+  await cdp.send('Debugger.pause')
 }
 
 // Status code of fetching url from the page (so it goes through the routes)
@@ -1642,6 +1685,111 @@ qual('UNDO is grayed out while Beeminder takes the datapoint', async (page, bee)
   await see(page, '#bigbut', '0')
 })
 
+// Replicata: a refresh of the goals is under way (as when you come back to
+// TallyBee), with Beeminder slow to answer, when you tap 3 and Submit.
+// Expectata: Clear and UNDO grayed out while the Submit waits for its turn,
+// and then while Beeminder takes the datapoint.
+// Resultata (in a mutant that never grayed them out while submitting): both
+// usable all along.
+qual('Clear and UNDO are grayed out while a Submit waits its turn', async (page, bee) => {
+  await login(page)
+  const [getshut, getopen] = gate()
+  const [postshut, postopen] = gate()
+  bee.reply = c => c.method === 'GET' ? getshut.then(() => null) : postshut
+  await comeback(page)
+  await calls(page, bee, LOAD + 2) // the goals and the user, held
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  for (const sel of ['#clearbut', '#undobut'])
+    assert.ok(await disabled(page, sel), `${sel}, waiting its turn`)
+  getopen()
+  await calls(page, bee, 2 * LOAD + 1) // the POST
+  for (const sel of ['#clearbut', '#undobut'])
+    assert.ok(await disabled(page, sel), `${sel}, sending`)
+  postopen(null)
+  await see(page, '#status', /^✓/)
+})
+
+// Replicata: tap 3 and Submit, with Beeminder slow to answer; before it does,
+// press UNDO, and then Clear, each made pressable first, as a bug in their
+// graying out would leave them (see "UNDO is grayed out while Beeminder takes
+// the datapoint").
+// Expectata: an error for each, the count still 3 till Beeminder takes the
+// datapoint, and then 0, with the 3 sent.
+// Resultata (with Clear and UNDO taking effect at once, and no assert): no
+// error, and the count at -3 in the end: the UNDO took a tap back mid-send,
+// the Clear cleared the rest, and then Beeminder's answer took the 3 sent off
+// the 0.
+// Resultata (with Clear and UNDO waiting their turn, through enqueue): Error:
+// {"undos":[]}, from the UNDO, once its turn came, after the Submit.
+qual('UNDO and Clear fail loudly if somehow pressed during a Submit', async (page, bee) => {
+  await login(page)
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'POST' ? shut : null
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  await calls(page, bee, LOAD + 1)
+  for (const sel of ['#undobut', '#clearbut']) {
+    await page.$eval(sel, b => { b.disabled = false; b.click() })
+    await expectError(page, bee, /"busy":true/)
+    assert.equal(await count(page), 3, sel)
+  }
+  open(null)
+  await see(page, '#status', /^✓/)
+  await settled(page)
+  assert.equal(await count(page), 0)
+  assert.deepEqual(values(bee), ['3'])
+})
+
+// Replicata: tap once, and press UNDO twice, the second time before the first
+// press has taken effect (here, both presses in one go; on a phone, two taps
+// closer together than TallyBee takes to act on one).
+// Expectata: the tap undone, UNDO grayed out, and no error: the second press
+// finds UNDO grayed out, with nothing left to undo.
+// Resultata (with UNDO waiting its turn, through enqueue): Error:
+// {"undos":[]}, as both presses got through before the first one's turn.
+qual('UNDO pressed twice at once, with one thing to undo, undoes it once', async page => {
+  await login(page)
+  await tap(page, '#bigbut')
+  await page.$eval('#undobut', b => { b.click(); b.click() })
+  await see(page, '#bigbut', '0')
+  await settled(page)
+  assert.ok(await disabled(page, '#undobut'))
+})
+
+// Replicata: tap 3, and press Clear twice, the second time before the first
+// press has taken effect (both in one go, as above); then UNDO.
+// Expectata: the second press finds Clear grayed out, at 0, so one UNDO
+// brings the 3 back.
+// Resultata (with Clear waiting its turn, through enqueue): both Clears went
+// through, the second clearing the 0 the first left, so one UNDO brought back
+// that 0.
+qual('Clear pressed twice at once clears once', async page => {
+  await login(page)
+  await tap(page, '#bigbut', 3)
+  await page.$eval('#clearbut', b => { b.click(); b.click() })
+  await see(page, '#bigbut', '0')
+  await settled(page)
+  await tap(page, '#undobut')
+  await see(page, '#bigbut', '3')
+})
+
+// Replicata: tap 3, and press Clear and then Submit, before the Clear has taken
+// effect (both in one go, as above).
+// Expectata: Submit sends what the Clear left, 0, and the count stays at 0.
+// Resultata (with Clear waiting its turn, through enqueue): Submit sent the 3
+// that the Clear cleared, and the count ended at -3.
+qual('Clear and then Submit at once submits what the Clear left', async (page, bee) => {
+  await login(page)
+  await tap(page, '#bigbut', 3)
+  await page.evaluate(() => { document.getElementById('clearbut').click()
+                              document.getElementById('subbut').click() })
+  await see(page, '#status', /^✓/)
+  await settled(page)
+  assert.equal(await count(page), 0)
+  assert.deepEqual(values(bee), ['0'])
+})
+
 // Replicata: tap once and Submit, with Beeminder slow to answer, and reach for
 // the dropdown.
 // Expectata: grayed out till Beeminder answers, since picking a goal loads
@@ -1748,6 +1896,87 @@ qual("Submit in another window during a submission sends that window's own count
   assert.notEqual(a, b)
 })
 
+// Replicata: TallyBee open in two windows, like two goals' apps on a phone.
+// The goals load again in one, as when you come back to it, with Beeminder
+// slow to answer, and you switch to the other meanwhile; the one in the
+// background then gets frozen, as Chrome on Android does a page a minute
+// after it goes there. Tap 3 and Submit.
+// Expectata: the 3 go to Beeminder.
+// Resultata (before): "Submitting…" and the infinibee for as long as the other
+// window stayed frozen (on a phone, for hours), with nothing sent: the Submit
+// waited for its turn, which went by a lock shared by all TallyBee windows
+// (see enqueue in script.js), held by the frozen window's goals load.
+qual('a window frozen in the background holds up no Submit in another', async (page, bee) => {
+  await login(page)
+  const w = await window2(page, APP)
+  await see(w, '#goals', /pushups/)
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
+  const n = bee.calls.length
+  await comeback(w)
+  await calls(page, bee, n + 2) // the goals and the user, held
+  await freeze(w)
+  open()
+  await page.bringToFront()
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  await see(page, '#status', /✓/)
+  assert.deepEqual(values(bee), ['3'])
+})
+
+// Replicata: tap 2 and Submit, with Beeminder slow to answer, and switch away
+// meanwhile; the page in the background then gets frozen, as Chrome on
+// Android does a page a minute after it goes there. Open TallyBee in another
+// window, like another goal's app, or the same goal's, installed again; tap 3
+// and Submit there.
+// Expectata: the goals load there, and the username, and the 3 go to
+// Beeminder.
+// Resultata (before): no goals, no username, and Submit grayed out, for as
+// long as the first window stayed frozen, and, logged in, no login button:
+// nothing to do but wait. The goals load waited for its turn, which went by a
+// lock shared by all TallyBee windows (see enqueue in script.js), held by the
+// frozen window's Submit.
+qual('a window frozen while it submits holds up no window opened after it', async (page, bee) => {
+  await login(page)
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'POST' ? shut.then(() => null) : null
+  await tap(page, '#bigbut', 2)
+  await tap(page, '#subbut')
+  await calls(page, bee, LOAD + 1)
+  await freeze(page)
+  open()
+  const w = await window2(page, alice('pushups'))
+  await see(w, '#goalname', 'alice/pushups')
+  await tap(w, '#bigbut', 3)
+  await tap(w, '#subbut')
+  await see(w, '#status', /✓/)
+  assert.deepEqual(values(bee), ['2', '3'])
+})
+
+// Replicata: tap 2 and Submit, with Beeminder slow to answer; the page then
+// gets frozen in the background. Open TallyBee in another window, tap 3 there,
+// and press Clear, then UNDO.
+// Expectata: 0, then 3, at once.
+// Resultata (with one lock for all windows, and Clear waiting its turn): 3,
+// for as long as the first window stayed frozen.
+qual('Clear and UNDO work beside a window frozen while it submits', async (page, bee) => {
+  await login(page)
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'POST' ? shut.then(() => null) : null
+  await tap(page, '#bigbut', 2)
+  await tap(page, '#subbut')
+  await calls(page, bee, LOAD + 1)
+  await freeze(page)
+  open()
+  const w = await window2(page, alice('pushups'))
+  await tap(w, '#bigbut', 3)
+  await see(w, '#bigbut', '3')
+  await clear(w)
+  await see(w, '#bigbut', '0')
+  await tap(w, '#undobut')
+  await see(w, '#bigbut', '3')
+})
+
 // Replicata: Submit over a connection that never answers.
 // Expectata: after a while, an error, the count kept, and Submit usable again.
 // Resultata (before): "Submitting…" forever, with Submit and Clear grayed out.
@@ -1763,6 +1992,29 @@ qual('a request that Beeminder never answers gives up with an error', async (pag
   await expectError(page, bee, /./)
   assert.ok(!await disabled(page, '#subbut'))
   assert.equal(await count(page), 3)
+})
+
+// Replicata: the goals load again, as when you come back to TallyBee, over a
+// connection that never answers; 15 seconds later, tap 3 and Submit.
+// Expectata: after a while, an error from the load, and then the 3 go to
+// Beeminder.
+// Resultata (in a mutant whose loads of the goals waited for Beeminder
+// forever): "Submitting…" forever, with Submit grayed out.
+qual('a load that Beeminder never answers gives up, and a Submit waiting for it goes', async (page, bee) => {
+  await page.clock.install()
+  await login(page)
+  bee.reply = c => c.method === 'GET' ? new Promise(() => {}) : null
+  await comeback(page)
+  await calls(page, bee, LOAD + 2) // the goals and the user, never answered
+  await page.clock.runFor(15000)
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  // (Just past the load's PATIENCE, not much more, which would run out the
+  // Submit's own, on this clock, before Beeminder's answer got to the page)
+  await page.clock.runFor(16000)
+  await see(page, '#status', /✓/)
+  await expectError(page, bee, /./)
+  assert.deepEqual(values(bee), ['3'])
 })
 
 // Replicata: a goal with no datapoints and no current value, as for a goal in
@@ -2628,6 +2880,68 @@ qual('a goals refresh during a submission cannot undo the datapoint', async (pag
   await see(page, '#safesum', 'safe for 4 days')
   await tap(page, '#bigbut', 2)
   await see(page, '#num', '125')
+})
+
+// Replicata: two windows in view side by side on odometer goal pages (at
+// 120). The goals load again in the second, as when you come back to it, with
+// Beeminder slow to answer the load's last call, for the goal's last
+// datapoint, which it answers late, with what it had when asked: the 120.
+// Meanwhile, Submit 3 in the first, which has the second load the goals again
+// (see sent in script.js); that load comes back first, with the 123, and the
+// slow one after it. Tap 2 in the second, and Submit there.
+// Expectata: the second says 125, and sends 125.
+// Resultata (before): 122, and Submit sent 122, from the slow load, from
+// before the 123: the two loads ran at once (see enqueue in script.js), and
+// the slow one came back last. (With one lock for all windows, as before
+// 2026-11-06, the 3 waited for the slow load to be done.)
+qual("a slow goals load can't undo another window's datapoint", async (page, bee) => {
+  await login(page)
+  await choose(page, 'pages')
+  const w = await window2(page, alice('pages'))
+  await see(w, '#goals', /pushups/)
+  const [shut, open] = gate()
+  bee.reply = late(bee, shut)
+  const n = bee.calls.length
+  await comeback(w)
+  await calls(page, bee, n + LOAD) // the last one held
+  await page.bringToFront()
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  await heard(w, '123')
+  open()
+  await settled(w)
+  await w.bringToFront()
+  await tap(w, '#bigbut', 2)
+  await see(w, '#num', '125')
+  await tap(w, '#subbut')
+  await see(w, '#status', /✓/)
+  assert.deepEqual(values(bee), ['123', '125'])
+})
+
+// Replicata: on odometer goal pages (at 120), come back to TallyBee, with
+// Beeminder slow to answer the goals load's last call, for the goal's last
+// datapoint, which it answers late, with what it had when asked: the 120.
+// Meanwhile, 130 gets entered on another device; leave TallyBee and come back
+// again, which loads the goals again; that load comes back first, with the
+// 130, and the slow one after it. Tap 3.
+// Expectata: 133.
+// Resultata (before): 123, from the slow load: the two loads ran at once (see
+// enqueue in script.js), and the slow one came back last.
+qual("a slow goals load can't undo a newer one", async (page, bee) => {
+  await login(page)
+  await choose(page, 'pages')
+  const [shut, open] = gate()
+  bee.reply = late(bee, shut)
+  const n = bee.calls.length
+  await comeback(page)
+  await calls(page, bee, n + LOAD) // the last one held
+  bee.goals[1].last_datapoint = datapoint(130)
+  await comeback(page)
+  await heard(page, '130')
+  open()
+  await settled(page)
+  await tap(page, '#bigbut', 3)
+  await see(page, '#num', '133')
 })
 
 // Replicata: on pages (at 120), a refresh of the goals is under way when you
@@ -3605,6 +3919,28 @@ qual('Clear clears at once, even while the goals are loading', async (page, bee)
   open()
   await settled(page)
   await see(page, '#bigbut', '5')
+})
+
+// Replicata: tap 3 and Submit. 2 seconds later, while TallyBee is loading the
+// goals (and Beeminder is slow), tap twice by mistake, and press UNDO twice.
+// Expectata: 0, at once.
+// Resultata (with loads taking turns that run alone, and UNDO waiting its
+// turn): 2, till the goals came.
+qual('UNDO undoes at once, even while the goals are loading', async (page, bee) => {
+  await page.clock.install()
+  await login(page)
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  await see(page, '#bigbut', '0')
+  await runtill(page, bee, LOAD + 3) // the goals and the user, asked for at once
+  await tap(page, '#bigbut', 2)
+  await tap(page, '#undobut', 2)
+  await see(page, '#bigbut', '0')
+  open()
+  await settled(page)
+  await see(page, '#bigbut', '0')
 })
 
 // Replicata: pick pages; switch to another tab and back; then open TallyBee's
@@ -6921,7 +7257,13 @@ qual('while TallyBee starts, the page is blank but for the infinibee', async pag
   const b = await box(page, '#infinibee')
   assert.ok(Math.abs(b.y + b.height / 2 - PHONE.height / 2) < 16 &&
             Math.abs(b.x + b.width / 2 - PHONE.width / 2) < 1, JSON.stringify(b))
+  // (The animation started over first, as when the page started just now:
+  // it's over 151ms after it starts, and gone with it, which, on a computer
+  // slowed down by other work, can be before the qual gets here)
   assert.deepEqual(await page.$eval('#infinibee', e => {
+    e.style.animation = 'none'
+    getComputedStyle(e).animationName // which ends the animation
+    e.style.animation = ''
     const a = e.getAnimations().find(x => x.animationName === 'appear')
     a.pause()
     return [100, 200].map(ms => { a.currentTime = ms
@@ -6962,3 +7304,117 @@ for (const file of ['script.js', 'beeminder.js'])
     assert.ok(await page.isVisible('#status'))
     assert.ok(!await page.isVisible('#infinibee'))
   })
+
+// ------------------------------------- what TallyBee remembers (2026-11-06)
+
+// Replicata: TallyBee in two windows: tap 3 in one, then 5 in the other; go
+// back to the first, which loads the goals again, as on any return to it
+// (see refresh in script.js). Close both, and open TallyBee again.
+// Expectata: the 5, from the window whose count changed last, as in "with two
+// windows closed, TallyBee opened again has the count that changed last".
+// Resultata (before): the 3, from the window that loaded the goals last:
+// loading the goals saved the window's own count too (see update in
+// script.js), as what TallyBee remembers for a window that opens with none of
+// its own.
+qual('with two windows closed, TallyBee opened again has the count that changed last, though the other window loaded the goals since', async (page, bee) => {
+  await login(page)
+  const w = await window2(page, APP)
+  await see(w, '#goals', /pushups/)
+  await page.bringToFront()
+  await tap(page, '#bigbut', 3)
+  await w.bringToFront()
+  await tap(w, '#bigbut', 5)
+  await page.bringToFront()
+  const n = bee.calls.length
+  await comeback(page)
+  await calls(page, bee, n + LOAD)
+  await settled(page)
+  const context = page.context()
+  await page.close()
+  await w.close()
+  const again = await context.newPage()
+  await again.goto(APP)
+  await see(again, '#goals', /pushups/)
+  await see(again, '#bigbut', '5')
+})
+
+// Replicata: tap 7 in TallyBee at a goal, pushups, as in that goal's app;
+// open TallyBee in another window, at another goal, situps, as in its app,
+// which starts at 0 (see "each TallyBee window has its own count"). Close the
+// first, then the other, and open TallyBee at pushups again.
+// Expectata: the 7, the count that changed last.
+// Resultata (before): 0: the other window, opening, saved its own 0 as what
+// TallyBee remembers for a window that opens with none of its own.
+qual('a window opened beside another leaves the count TallyBee remembers as it was', async (page, bee) => {
+  bee.goals.push({ slug: 'situps', kyoom: true, curval: 0, deadline: 0,
+                   last_datapoint: null, safesum: '+5 situps due by 12am', queued: false })
+  await login(page)
+  await tap(page, '#bigbut', 7)
+  const w = await window2(page, alice('situps'))
+  await see(w, '#goalname', 'alice/situps')
+  await see(w, '#bigbut', '0')
+  await settled(w)
+  const context = page.context()
+  await page.close()
+  await w.close()
+  const again = await context.newPage()
+  await again.goto(alice('pushups'))
+  await see(again, '#goalname', 'alice/pushups')
+  await see(again, '#bigbut', '7')
+})
+
+// Replicata: tap 7 in TallyBee at a goal, pushups, as in that goal's app, and
+// close it; with no other TallyBee window open, open TallyBee at another goal,
+// situps, as in its app; then close that, and open pushups again.
+// Expectata: situps at 0; and pushups with its 7 back, as Beedroid keeps
+// each goal's tally (see getPrefKey in Beedroid's TallyCounterView.java).
+// Resultata (before): situps showed the 7, and Submit there sent 7 situps; and
+// pushups then had 0.
+qual("a goal's window that opens with none of its own gets that goal's count, not another's", async (page, bee) => {
+  bee.goals.push({ slug: 'situps', kyoom: true, curval: 0, deadline: 0,
+                   last_datapoint: null, safesum: '+5 situps due by 12am', queued: false })
+  await login(page)
+  await tap(page, '#bigbut', 7)
+  await settled(page)
+  const context = page.context()
+  await page.close()
+  const s = await context.newPage()
+  await s.goto(alice('situps'))
+  await see(s, '#goalname', 'alice/situps')
+  await see(s, '#bigbut', '0')
+  await s.close()
+  const p = await context.newPage()
+  await p.goto(alice('pushups'))
+  await see(p, '#goalname', 'alice/pushups')
+  await see(p, '#bigbut', '7')
+})
+
+// Replicata: tap 7 in TallyBee at pushups, as in that goal's app; open
+// TallyBee at situps beside it, as in that goal's app, and tap 2 there. Both
+// close, as when Android kills Chrome in the background (which then forgets
+// each window's own: see sessionStorage in Chromium's
+// components/services/storage/storage_service_impl.cc). Open pushups, then
+// situps beside it.
+// Expectata: pushups with its 7, and situps with its 2.
+// Resultata (before): pushups with situps' 2 (which its Submit then sent as
+// pushups), and situps with 0: the 7 gone.
+qual('after all its windows close, each goal gets its own count back', async (page, bee) => {
+  bee.goals.push({ slug: 'situps', kyoom: true, curval: 0, deadline: 0,
+                   last_datapoint: null, safesum: '+5 situps due by 12am', queued: false })
+  await login(page)
+  await tap(page, '#bigbut', 7)
+  const w = await window2(page, alice('situps'))
+  await see(w, '#goalname', 'alice/situps')
+  await tap(w, '#bigbut', 2)
+  await settled(w)
+  const context = page.context()
+  await page.close()
+  await w.close()
+  const p = await context.newPage()
+  await p.goto(alice('pushups'))
+  await see(p, '#goalname', 'alice/pushups')
+  await see(p, '#bigbut', '7')
+  const s = await window2(p, alice('situps'))
+  await see(s, '#goalname', 'alice/situps')
+  await see(s, '#bigbut', '2')
+})
