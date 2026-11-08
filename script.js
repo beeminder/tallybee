@@ -1,4 +1,6 @@
 import * as beeminder from './beeminder.js';
+import * as journal from './journal.js'
+import { reduce, upgrade, add } from './tally.js'
 
 // Convenience functions -------------------------------------------------------
 function $(id) { return document.getElementById(id) } // to be jQuery-esque
@@ -37,76 +39,147 @@ const redirectUri = location.origin + '/'
 window.addEventListener('error', e => fail(e.error ?? e))
 window.addEventListener('unhandledrejection', e => fail(e.reason))
 
-// What TallyBee remembers. What's each window's own (each tab's, or
-// home-screen icon's), the pending datapoint and what UNDO can put back, is in
-// the window's sessionStorage, which outlasts reloading, going to another
-// goal, and going to Beeminder to log in, but not closing the window (nor, on
-// Android, Chrome's starting again, which forgets every window's). So it's in
-// localStorage too, under tallybee and the slug of the window's goal, like
-// "tallybee pushups" (or "tallybee null", for a window at no goal yet), for
-// whichever window at that goal changed its own last, for a window that opens
-// at that goal with none of its own to take, if no other TallyBee window is
-// open at that goal (see OPEN): a goal's TallyBee closed and opened again has
-// its count back, as in Beedroid, which keeps each goal's tally, but a window
-// opened beside another at the same goal starts afresh, rather than with a
-// copy of the other's, for both to send. What all windows share, which goal
-// was selected last and the fold, is in localStorage, under tallybee-shared,
-// where any TallyBee window on the device can change it, so it's read afresh
-// wherever it's used. (A goal's slug is its short name, the one in its URL,
-// like the pushups in beeminder.com/alice/pushups.)
-// The window's own (OWN):
-// count: taps, less −1s, not yet submitted to Beeminder (or what makes a
-//   number typed as the number to send: see #num)
-// requestid: Beeminder's idempotency key for the pending datapoint, the one
-//   Submit sends. Resending the datapoint after a failure updates it in place
-//   if Beeminder got it after all (as when only the reply got lost), rather than
-//   adding it again. Each success, and each Clear, starts a new one.
-// pin: {slug, base} for the pending datapoint, from when it was first sent to
-//   the goal it was last sent to: that goal, and the base (see livebase) its
-//   value was built on, so that a resend is the same datapoint even if the
-//   goal's value has changed since, like by the pending datapoint itself
-//   getting there. Null till then.
-// comment: what the user typed to go with the pending datapoint (see submit),
-//   like "felt strong", or empty for nothing
-// day: the daystamp (Beeminder's way of writing a day, like 20261002) of the
-//   day picked for the pending datapoint, or null for today, whatever day
-//   that is for the page that submits it (see today)
-// undos: what each change since the last Submit changed, as it was before, for
-//   UNDO to put back, the last one last: {count}, for a tap, −1, or edit of the
-//   number to send; or, for a Clear, which also starts a new pending
-//   datapoint, {count, requestid, pin, comment, day}; or {comment}, for an edit
-//   of the comment; or {day}, for a pick of the day. (Only what it changed,
-//   since a Submit can change the pin after a tap.) Empty at first, and once a
-//   Submit gets to Beeminder (which can't be undone, and which takes UNDO away
-//   from taps made while it was sending, too).
-// at: the slug of the goal the window was at when its own last went into
-//   localStorage, under that goal (see update), or null, for none, so that,
-//   once the window is at another goal, its own moves there, rather than
-//   staying behind too, for another window to take
-// What all windows share (SHARED):
-// slug: the goal selected last, for when TallyBee's URL doesn't name one
-// folded: whether the footer is folded, all but the bar (see #drawer in
-//   index.html). Only the fold button changes it.
-// (TallyBee from before windows had their own kept it all in localStorage,
-// under tallybee, which a window that opens with none of its own takes, as
-// above, the fold and the goal selected last too, till a window remembers
-// anything. And TallyBee from before each goal had its own, 2026-11-06, kept
-// a window's own there, under tallybee, for all goals, which the first window
-// that opens with none of its own takes, at whatever goal.)
-// (What TallyBee remembered when UNDO could take back only the last change has
-// a prev, that change, or null, for none, instead of undos; and before that,
-// no prev, for none.)
-// (And what it remembered before there were comments, folding, or days gets no
-// comment, unfolded, for today.)
-const OWN = ['count', 'requestid', 'pin', 'comment', 'day', 'undos', 'at']
-const SHARED = ['slug', 'folded']
-function load() {
-  const { prev = null, ...t } = { comment: '', folded: false, day: null, at: null,
-    ...JSON.parse(sessionStorage.getItem('tallybee') ??
-                  localStorage.getItem(`tallybee ${slug}`) ??
-                  localStorage.getItem('tallybee')) ?? { slug: null, ...blank() },
+// One durable pending datapoint per goal, shared by every window. Each input
+// is an immutable journal entry saved synchronously before render acknowledges
+// it. The journal's checkpoint is housekeeping, never part of saving a tap.
+// count, requestid, pin, comment, day and undos retain their previous meanings.
+// The map lets assigning a logged-out tally to its first goal be one write.
+const STATE = 'tallybee-state'
+const pick = (t, keys) => Object.fromEntries(keys.map(k => [k, t[k]]))
+const empty = t => t.count === 0 && t.comment === '' && t.day === null &&
+                   t.pin === null && t.undos.length === 0
+const blank = (s, id = crypto.randomUUID()) => ({ count: 0, requestid: id,
+  pin: null, comment: '', day: null, undos: [], at: s, slug: s, folded: false })
+
+function preferences() {
+  const old = JSON.parse(localStorage.getItem('tallybee'))
+  const keys = ['slug', 'folded'].filter(k => old && Object.hasOwn(old, k))
+  return { slug: null, folded: false, ...pick(old, keys),
     ...JSON.parse(localStorage.getItem('tallybee-shared')) }
-  return valid({ undos: prev === null ? [] : [prev], ...t })
+}
+
+// These are explicit migrations of previous storage formats, not repairs of
+// malformed state. Required fields still pass valid(), including requestid.
+function legacy(raw, s) {
+  const { prev = null, ...t } = JSON.parse(raw)
+  return upgrade(valid({ comment: '', day: null, folded: false, at: s, slug: s,
+                         undos: prev === null ? [] : [prev], ...t }))
+}
+const keyfor = s => JSON.stringify(s)
+const oldkey = k => /^tallybee(?: |$)/.test(k)
+const oldrecords = () => Object.fromEntries(Object.keys(localStorage)
+  .filter(oldkey).map(k => [k, localStorage.getItem(k)]))
+const same = (a, b) => ['count', 'requestid', 'pin', 'comment', 'day', 'undos']
+  .every(k => JSON.stringify(a[k]) === JSON.stringify(b[k]))
+const archive = raw => localStorage.setItem(`tallybee-recovery ${crypto.randomUUID()}`, raw)
+function initial() {
+  const tallies = {}, legacyRecords = oldrecords()
+  const old = legacyRecords.tallybee
+  if (old !== undefined) {
+    const t = legacy(old, JSON.parse(old).slug ?? null)
+    tallies[keyfor(t.slug)] = t
+  }
+  for (const key of Object.keys(legacyRecords).filter(k => k.startsWith('tallybee '))) {
+    const name = key.slice('tallybee '.length)
+    const s = name === 'null' ? null : name
+    const t = legacy(legacyRecords[key], s), previous = tallies[keyfor(s)]
+    // TODO: Conflicting older saved tallies were both preserved.
+    beeminder.assert(!previous || empty(previous) || same(previous, t),
+                     `Numeri servati discrepant: ${s}`)
+    tallies[keyfor(s)] = t
+  }
+  return { tallies, legacy: legacyRecords, conflicts: [] }
+}
+const object = t => t !== null && typeof t === 'object' && !Array.isArray(t)
+function bookcheck(b) {
+  beeminder.assert(object(b) && object(b.tallies) && object(b.legacy) &&
+    Array.isArray(b.conflicts), JSON.stringify(b))
+  Object.values(b.tallies).forEach(t => {
+    valid(t)
+    beeminder.assert(t.undos.every(u => typeof u._id === 'string' &&
+      Number.isFinite(u._delta)), JSON.stringify(t))
+  })
+  return b
+}
+function reduceGoals(book, event, id) {
+  bookcheck(book)
+  const { slug: s, change } = event
+  beeminder.assert(s === null || typeof s === 'string', JSON.stringify(event))
+  const k = keyfor(s), t = book.tallies[k] ?? blank(s, id)
+  if (change.type === 'assign') {
+    const source = book.tallies.null
+    // An occupied destination leaves both tallies intact. The caller reports
+    // that conflict after saving, so a concurrent input cannot poison replay.
+    if (source && !empty(source) && empty(t)) {
+      book.tallies[k] = { ...source, at: s, slug: s }
+      book.tallies.null = blank(null, id)
+    } else {
+      book.tallies[k] = t
+      if (source && !empty(source)) book.conflicts.push(event)
+    }
+  } else if (change.type === 'import' && !empty(t)) {
+    // The conflicting source is already archived; the caller reports it.
+    book.tallies[k] = t
+    if (!same(t, change.state)) book.conflicts.push(event)
+  } else book.tallies[k] = valid(reduce(t, change, id))
+  return book
+}
+function book() {
+  const b = bookcheck(journal.read(STATE, initial, reduceGoals))
+  // TODO: Conflicting pending tallies are preserved and require explicit resolution.
+  beeminder.assert(b.conflicts.length === 0, 'Numeri servati discrepant')
+  return b
+}
+export function load() {
+  return valid({ ...(book().tallies[keyfor(slug)] ?? blank(slug)),
+    ...preferences(), slug })
+}
+function save(change, s = slug) {
+  return journal.append(STATE, { slug: s, change }, initial, reduceGoals)
+}
+function update(change) {
+  save(change)
+  render()
+}
+function remember(fields) {
+  localStorage.setItem('tallybee-shared', JSON.stringify({ ...preferences(), ...fields }))
+  render()
+}
+
+// An old version can still write its private backups. Preserve those writes
+// and report the conflict; guessing how to merge two pending datapoints would
+// risk either losing taps or sending them twice.
+function checkLegacy() {
+  const previous = book().legacy, current = oldrecords()
+  const changed = [...new Set([...Object.keys(previous), ...Object.keys(current)])]
+    .filter(k => previous[k] !== current[k])
+  for (const k of changed) {
+    archive(JSON.stringify({ key: k, previous: previous[k], current: current[k] }))
+    if (current[k] !== undefined) archive(current[k])
+  }
+  // TODO: An older TallyBee window changed saved data; all copies were preserved.
+  beeminder.assert(changed.length === 0, 'Altera versio numeros mutavit')
+}
+
+// Preserve the old window's private state before retiring sessionStorage.
+// Distinct unfinished datapoints are a conflict, never implicitly added or
+// replaced. An untouched installation tab has no datapoint to recover.
+function migrate() {
+  const raw = sessionStorage.getItem('tallybee')
+  if (raw !== null) archive(raw)
+  checkLegacy()
+  if (raw !== null) {
+    const stored = JSON.parse(raw)
+    const s = Object.hasOwn(stored, 'at') ? stored.at : slug
+    const t = legacy(raw, s)
+    if (!empty(t)) {
+      const durable = save({ type: 'import', state: t }, s).tallies[keyfor(s)]
+      // TODO: Two different pending tallies were preserved; resolve their conflict.
+      beeminder.assert(same(durable, t), `Numeri discrepant: ${s}; ${t.count}`)
+    }
+    sessionStorage.removeItem('tallybee')
+  }
+  save({ type: 'init' })
 }
 
 // Throw unless t is something TallyBee can remember (see load); else return t
@@ -126,86 +199,24 @@ function valid(t) {
   return t
 }
 
-// Change what TallyBee remembers, with function f, and show the change. If f
-// makes it something load couldn't read back, this throws, changing nothing.
-// What's the window's own goes into localStorage too (see load), under this
-// page's goal, only if it changed, so that a window's merely opening, or
-// loading the goals, leaves what another window at its goal left there as it
-// was; and from under any other goal it was there under (see at).
-function update(f) {
-  const t = load()
-  const at = t.at
-  f(t)
-  t.at = slug
-  const own = JSON.stringify(pick(valid(t), OWN))
-  if (own !== sessionStorage.getItem('tallybee')) {
-    localStorage.removeItem(`tallybee ${at}`)
-    localStorage.removeItem('tallybee') // as from before 2026-11-06 (see load)
-    localStorage.setItem(`tallybee ${slug}`, own)
-  }
-  sessionStorage.setItem('tallybee', own)
-  localStorage.setItem('tallybee-shared', JSON.stringify(pick(t, SHARED)))
-  render()
-}
-
-// Start a new pending datapoint (see requestid and pin), with no comment, for
-// today, in t, and return t
-function fresh(t) {
-  t.requestid = crypto.randomUUID()
-  t.pin = null
-  t.comment = ''
-  t.day = null
-  return t
-}
-
-// What a window that starts afresh has of its own (see OWN): a new pending
-// datapoint, with a count of 0, and nothing to undo, at this page's goal
-const blank = () => fresh({ count: 0, undos: [], at: slug })
-
-// The fields of t named in keys
-const pick = (t, keys) => Object.fromEntries(keys.map(k => [k, t[k]]))
-
-// Change the pending datapoint with function f, like update does, first
-// remembering, for UNDO, how the fields named in keys, the ones f changes, were
-// (see undos)
-function change(keys, f) {
-  update(t => {
-    t.undos.push(pick(t, keys))
-    f(t)
-  })
-}
-
-// An edit of a text field, the comment or the number to send, from when it
-// gets the focus till it loses it, is one change, for UNDO, which puts back
-// what it changed as it was just before the edit's first keystroke. (Not as it
-// was when the field got the focus, since a Clear or an UNDO can change it in
-// between, where pressing a button leaves the field the focus, like in
-// Safari.) Each keystroke gets remembered at once, with edited.
-// before: the pending datapoint (its requestid) for which the edit under way
-// has given UNDO a way back to before it: null from when the field gets the
-// focus till the edit's first keystroke, and again after an UNDO during the
-// edit (as when a button doesn't take the focus, like in Safari); undefined
-// between edits. So once another pending datapoint starts during the edit,
-// as with a Clear, the edit's next keystroke gives UNDO a way back to just
-// before it, after the Clear, rather than leaving UNDO of the Clear to take the
-// keystrokes back too. (A Submit can't start one during an edit: it grays out
-// the fields, which ends the edit.)
+// An edit's keystrokes are durable individually and form one UNDO step.
+// The reducer also includes requestid in the group, so a Submit or Clear
+// ends the preceding datapoint's edit even when the field keeps its focus.
 let before
 function edits(field) {
-  field.addEventListener('focus', () => { before = null })
+  field.addEventListener('focus', () => { before = crypto.randomUUID() })
   field.addEventListener('blur', () => { before = undefined })
 }
-
-// Change the pending datapoint with function f, for a keystroke in an edit
-// (see edits) of the fields named in keys, first giving UNDO a way back to
-// before the edit, as they are, if it has none for this pending datapoint
 function edited(keys, f) {
   beeminder.assert(before !== undefined, JSON.stringify({ before: typeof before }))
-  update(t => {
-    if (before !== t.requestid) t.undos.push(pick(t, keys))
-    f(t)
-    before = t.requestid
-  })
+  const t = load()
+  f(t)
+  update({ type: 'edit', values: pick(t, keys), edit: before })
+}
+function change(keys, f) {
+  const t = load()
+  f(t)
+  update({ type: 'change', values: pick(t, keys) })
 }
 
 // The user, from Beeminder, once the goals have loaded (see loadGoals); till
@@ -262,7 +273,8 @@ const owner = u => named.groups.user ?? u.username
 // logged in; else the one selected last (or, the first time, till the goals
 // load, none)
 let slug = named.groups.slug ?? new URLSearchParams(location.search).get('goal')
-slug ??= load().slug
+slug ??= preferences().slug ?? null
+migrate()
 
 // The URL of TallyBee, as a path, for user u's goal s: its user's name and its
 // slug, as on Beeminder's own site, but with a slash at the end (see
@@ -314,39 +326,14 @@ function manifest() {
 
 // Make TallyBee installable as an app (see manifest). The page starts with no
 // manifest, since Safari reads only the first one a page has. It's added here,
-// before anything that waits (see OPEN), so that it's there by the time the
+// before anything that waits, so that it's there by the time the
 // page has loaded, for browsers that go by what they find then.
 document.head.append(Object.assign(document.createElement('link'),
                                    { id: 'manifest', rel: 'manifest', href: manifest() }))
 
-// Whether another TallyBee window is open at this page's goal: each holds a
-// lock, shared, named for its goal, like "tallybee-open pushups", for as long
-// as it's open (the browser lets go of it as the window closes), and, if it
-// opened at no goal, one for the goal it gets once the goals load, too (see
-// loadGoals). A window that opens beside another at the same goal, with
-// nothing of its own yet, starts afresh, rather than taking the tally TallyBee
-// remembers for that goal (see load), which may be the other's. Only such a
-// window asks, as the asking holds up all that comes after this, like the big
-// button's working: not a page reloaded, or gone to for another goal, whose
-// window has its own already. (What it starts with is in the order of OWN,
-// as update writes it, so that, as long as it's unchanged, update leaves the
-// other's in localStorage as it was.)
-const OPEN = 'tallybee-open'
-const holdopen = s => navigator.locks.request(`${OPEN} ${s}`, { mode: 'shared' },
-                                              () => new Promise(() => {}))
-if (sessionStorage.getItem('tallybee') === null &&
-    (await navigator.locks.query()).held.some(l => l.name === `${OPEN} ${slug}`))
-  sessionStorage.setItem('tallybee', JSON.stringify(pick(blank(), OWN)))
-holdopen(slug)
-
 // Whether TallyBee is waiting on something, so can't take another datapoint
 // or goal: on Beeminder to take a datapoint, or on another goal's page to load
 let busy = false
-
-// a + b, less any stray digits from computers' binary arithmetic, as in 1 +
-// 0.14 = 1.1400000000000001 (JavaScript's numbers have about 16 significant
-// digits, of which this keeps 15)
-const add = (a, b) => Number((a + b).toPrecision(15))
 
 // Throw unless d is a datapoint as TallyBee needs one from Beeminder: with a
 // value, a daystamp, and a comment; else return d
@@ -530,7 +517,7 @@ function fail(err) {
 // Add d to the count, with a 25ms buzz like Beedroid (where the phone can
 // buzz: iPhones can't)
 function bump(d) {
-  change(['count'], t => { t.count = add(t.count, d) })
+  update({ type: 'add', amount: d })
   navigator.vibrate?.(25)
 }
 
@@ -577,10 +564,14 @@ function dropdown() {
 async function loadGoals() {
   const [gs, u] = await Promise.all([beeminder.getGoals(), beeminder.getUser()])
   goalscheck(gs, u)
-  const was = slug
-  slug ??= gs[0]?.slug ?? null
-  // A page that opened at no goal is open at the one it gets now, too (see OPEN)
-  if (slug !== was) holdopen(slug)
+  const next = slug ?? gs[0]?.slug ?? null
+  if (next !== slug) {
+    const saved = save({ type: 'assign' }, next)
+    // TODO: A tally already exists for the first goal; both tallies were preserved.
+    beeminder.assert(!saved.tallies.null || empty(saved.tallies.null),
+                     `Iam numerus servatus est: ${next}`)
+  }
+  slug = next
   // The goal's last datapoint, for the base of an odometer-like goal (see
   // livebase), and to show (see render), is the datapoint added to it last,
   // which isn't always the one Beeminder calls last_datapoint
@@ -597,7 +588,7 @@ async function loadGoals() {
   dropdown()
   history.replaceState(null, '', goalurl(owner(user), slug))
   $('manifest').href = manifest()
-  update(t => { t.slug = slug })
+  remember({ slug })
   poll()
   beeminder.assert(slug === null || g !== NOGOAL,
                    `No such goal: "${owner(user)}/${slug}"`)
@@ -629,7 +620,7 @@ function via() {
 // the time only to one with no comment. And so is its day: the one picked, or
 // else the page's today (see day).
 function submit() {
-  const { count: n, comment: typed, day } = load()
+  const { count: n, comment: typed, day, requestid } = load()
   const comment = typed || via()
   const ds = day ?? today
   busy = true
@@ -638,32 +629,34 @@ function submit() {
   render()
   enqueue(async () => {
     try {
+      await navigator.locks.request(`tallybee-send ${slug}`, { ifAvailable: true }, async lock => {
+      // TODO: Another window is already submitting this goal's tally.
+      beeminder.assert(lock !== null, 'Numerus iam mittitur')
+      // TODO: The pending tally changed before this submission could begin.
+      beeminder.assert(load().requestid === requestid, 'Numerus mutatus est')
       const g = goal()
       beeminder.assert(g !== NOGOAL, JSON.stringify({ slug }))
       const { pin } = load() // as it was before this send
       // Pin the pending datapoint's base, if this is its first time out, or it
       // was last sent to another goal
-      update(t => { t.pin = pinned(g, t) })
+      update({ type: 'pin', requestid, pin: pinned(g, load()) })
       const t = load()
       const dp = await beeminder.addDatapoint(g.slug, add(n, t.pin.base), ds,
         comment, t.requestid).catch(e => {
           // Beeminder turned this send away for want of a login it accepts, so
           // the datapoint didn't get there this time, and gets no pin from it
-          if (e.message === beeminder.REAUTH) update(t => { t.pin = pin })
+          if (e.message === beeminder.REAUTH) update({ type: 'unpin', requestid, pin })
           throw e
         })
       g.last_datapoint = dpcheck(dp)
       g.queued = true // as Beeminder has it now, till the goals load again
-      update(t => {
-        t.count = add(t.count, -n)
-        fresh(t)
-        t.undos = []
-      })
+      update({ type: 'accepted', requestid, n })
       // status line once Beeminder has the datapoint, with its value and
       // goal (Beedroid says "Submission successful!")
       say('ok', `✓ Submission successful: ${dp.value} → ${g.slug}`)
       sent.postMessage(g.slug)
       poll()
+      })
     } finally {
       busy = false
       render()
@@ -732,19 +725,17 @@ $('numform').addEventListener('submit', () => $('num').blur())
 // then, which only a bug could let through, fails loudly.
 $('clearbut').addEventListener('click', () => {
   beeminder.assert(!busy, JSON.stringify({ busy }))
-  change(['count', 'requestid', 'pin', 'comment', 'day'],
-         t => { t.count = 0; fresh(t) })
+  update({ type: 'clear' })
   announce()
 })
 // After an UNDO during an edit, the edit's next keystroke gives UNDO a way back
 // again (see edits)
 $('undobut').addEventListener('click', () => {
   beeminder.assert(!busy, JSON.stringify({ busy }))
-  update(t => {
-    beeminder.assert(t.undos.length > 0, JSON.stringify({ undos: t.undos }))
-    Object.assign(t, t.undos.pop())
-  })
-  before &&= null
+  const t = load()
+  beeminder.assert(t.undos.length > 0, JSON.stringify({ undos: t.undos }))
+  update({ type: 'undo', target: t.undos.at(-1)._id })
+  before &&= crypto.randomUUID()
   announce()
 })
 // Every keystroke in the comment gets remembered at once. One edit of it is one
@@ -763,7 +754,7 @@ $('comment').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.isComposing) $('comment').blur()
 })
 // The fold button folds away the drawer, or brings it back
-$('foldbut').addEventListener('click', () => update(t => { t.folded = !t.folded }))
+$('foldbut').addEventListener('click', () => remember({ folded: !load().folded }))
 $('subbut').addEventListener('click', submit)
 // The × at the end of a message takes it away (see #msgline), handing the
 // keyboard's focus, which it had if pressed from the keyboard, to the big
@@ -808,8 +799,12 @@ document.body.addEventListener('touchstart', () => {}, { passive: true })
 // too. (Not on every change: loading the goals changes what's remembered,
 // which would set off the other windows, and so on forever.)
 window.addEventListener('storage', e => {
+  if (oldkey(e.key)) {
+    archive(JSON.stringify({ key: e.key, value: e.newValue }))
+    checkLegacy()
+  }
   render()
-  if (!/^tallybee(-shared$| |$)/.test(e.key)) refresh()
+  if (!/^tallybee(?:[- ]|$)/.test(e.key)) refresh()
 })
 // Other TallyBee windows hear when this one's datapoint gets to Beeminder, and
 // load the goals again, as it can change their goal, like its safesum, or, on
@@ -847,7 +842,7 @@ $('newdayx').addEventListener('click', () => {
 // Let TallyBee open with no connection (see sw.js), where browsers can
 navigator.serviceWorker?.register('sw.js')
 dropdown() // as kept (see goals), till they load
-update(t => { t.slug = slug }) // this page's goal is now the one selected last
+remember({ slug }) // this page's goal is now the one selected last
 // Log in with what Beeminder just sent us, if anything. Then load the goals,
 // even if what Beeminder sent was an error (which fail then shows), unless it
 // was an access token, which means loading the page again (see autoLogin).

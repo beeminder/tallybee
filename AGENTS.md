@@ -41,6 +41,36 @@ I'm tentatively retiring the following rules that seem unncessary for Fable and 
 
 # Agent Scratchpad (human edits only above this line)
 
+## Tally persistence quals (2026-11-07)
+
+User: "trying to preserve separate window counts was probably misguided. that was claude's idea and i failed to think it through when okaying it"
+
+The user requested an extensive qual-first pass. The revised specs use one durable tally per goal, shared by that goal's windows; switching goals preserves each goal's pending datapoint. New quals cover reopening beside surviving or frozen windows, same-task reloads, rejected writes, concurrent taps, and failed-send recovery. The implementation now uses one synchronous durable journal for the per-goal tallies. Do not restore the separate-window expectations. Saves precede display changes; asynchronous checkpoints only compact already-durable entries. Legacy records are retained, and conflicting private histories are archived and reported explicitly.
+
+## Persistence implementation audit (2026-11-07)
+
+The OPEN-lock blanking rule and delete-before-save update are removed. Same-goal windows share their tally, comment, day and UNDO; selecting another goal reads that goal's tally. A send locks only its goal and refuses a simultaneous send explicitly. The native Android Back gesture has not been exercised on a device; browser lifecycle, installed-app mode, surviving/frozen siblings and immediate reloads are covered with Playwright's bundled Chromium.
+
+New conditional branches, recorded for anti-magic review:
+
+1. `journal.js`: skip a name already removed by checkpoint cleanup; select the requested journal's entries; retry a scan if its base changed; skip entries already included in the checkpoint; skip an empty checkpoint; seed the first uncheckpointed entry; stringify assertion diagnostics only on failure. Cache conditionals reuse only identical durable bytes and an identical replayed prefix under the same base; otherwise replay from the durable base. These do not decide whether to save.
+2. `tally.js`: fail a violated assertion; upgrade an old UNDO frame; create a new UNDO frame; attach grouping metadata only to an edit; apply UNDO only if its target still exists; apply pin changes only to the expected pending datapoint; subtract an accepted submission only from that same pending datapoint. The event dispatch selects the explicit user operation. Duplicate UNDO cannot erase a later edit.
+3. `script.js`: import an old global record if present; distinguish assignment from ordinary changes; transfer a meaningful unassigned tally only into an untouched goal; record occupied-destination and divergent-import conflicts; archive an existing legacy value; archive and inspect a private session if present; import it only if meaningful; assign the first goal only when it changes; archive old-version storage events before reporting their conflict. Conflicts persist outside replay, so they cannot make the journal itself uncheckpointable. All original records and competing histories remain available.
+
+The repository's git history is untouched. `/Users/dreeves/.claude/settings.json` contains explicit mutating-git denials and the `git-guard.py` hook; those are Claude's settings, not a claim about Codex configuration.
+
+## Version bumps (user, 2026-11-07)
+
+"also please bump the version in index.html and 404.html with every change you make"
+
+Every change must include matching version bumps in index.html and 404.html. Use the existing date-and-letter format, advancing the letter for further changes on the same day. Keep the two HTML files byte-for-byte identical.
+
+## Browser preference (user, 2026-11-07)
+
+"use playwright, not chrome (remember this). chrome crashes whenever you (astra) tries to use it"
+
+Use Playwright's bundled Chromium for browser verification. Do not launch the installed Google Chrome or use `channel: 'chrome'`, including through the existing quals harness. Adapt that harness before running it.
+
 ## Questions from Opus (2026-10-01)
 
 Answer inline (y/n/words), or write "defaults" to take every rec.

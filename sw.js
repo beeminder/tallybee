@@ -14,7 +14,7 @@ const CACHE = 'tallybee'
 // What TallyBee needs to open, fetched and kept as soon as this is installed,
 // since it only starts answering for TallyBee the next time TallyBee opens:
 // 404.html too, for a goal's page (see NOTFOUND)
-const FILES = ['./', '404.html', 'style.css', 'script.js', 'beeminder.js',
+const FILES = ['./', '404.html', 'style.css', 'script.js', 'beeminder.js', 'journal.js', 'tally.js',
                'infinibee.svg', 'icon-192.png', 'apple-touch-icon.png']
 
 // What GitHub Pages answers with, under a 404, for a URL it has no file for,

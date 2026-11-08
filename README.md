@@ -1,7 +1,7 @@
 https://tallybee.beeminder.com
 
 Next thing I was gonna say to Claude:
-it turns out i don't want wade through all the junk in the non-human section of AGENTS.md. can you go through all that and ask me what you still need to one thing at a time?
+it turns out i don't want wade through all the junk in the non-human section of AGENTS.md. can you go through all that and ask me what you still need to one thing at a time? and clean it all up in the process; make everything below the "humans only above this line" line be agents-only.
 
 
 ## Wishlist

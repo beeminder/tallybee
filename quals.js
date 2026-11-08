@@ -1,7 +1,8 @@
 /*******************************************************************************
  * Quals (what most people call tests; see blog.beeminder.com/quals) for
  * TallyBee. Run them with `npm install` (once) and then `npm test`. They drive
- * the installed Google Chrome, headless, via playwright-core.
+ * Playwright's bundled Chromium, headless, via playwright-core. Install its
+ * browser with `npx playwright-core install chromium` before the first run.
  *
  * Each qual loads the app at its real URL (tallybee.beeminder.com) in a fresh
  * browser profile on a phone-sized touchscreen (or, for quals that say so, a
@@ -70,7 +71,7 @@ const DESK = { viewport: { width: 1280, height: 800 }, hasTouch: false,
                isMobile: false }
 
 let browser
-before(async () => { browser = await chromium.launch({ channel: 'chrome' }) })
+before(async () => { browser = await chromium.launch() })
 after(() => browser.close())
 
 // Every page the quals open draws its text in Roboto, Android's own system
@@ -428,9 +429,9 @@ const count = async page => Number(await page.textContent('#bigbut'))
 // SPEC CHANGE (windows, 2026-10-13): what's the window's own, like the count,
 // is in its sessionStorage, and what all windows share, like the fold, in
 // localStorage, under tallybee-shared
-const tallied = page => page.evaluate(() => ({
-  ...JSON.parse(sessionStorage.getItem('tallybee')),
-  ...JSON.parse(localStorage.getItem('tallybee-shared')) }))
+// SPEC CHANGE (shared goals, 2026-11-07): inspect the durable goal record,
+// rather than treating a window's private session copy as authoritative.
+const tallied = page => page.evaluate(async () => (await import('/script.js')).load())
 // OLDER: TallyBee from before each window had its own count (2026-10-13)
 // kept all it remembered in localStorage, under tallybee, which is where
 // quals about what such a TallyBee left put what it remembered, t, before
@@ -1320,25 +1321,27 @@ qual('the count survives reloading the page', async page => {
 // this, after AGENTS.md N10: with one count for all windows, a tap in one
 // could vanish when another loaded the goals). So 10 in the one, and 1 in the
 // other, after reloading too; and a third window starts at 0.
-qual('each TallyBee window has its own count', async page => {
+// SPEC CHANGE (shared goals, 2026-11-07): one tally per goal; all three
+// windows show all 11 taps.
+qual('windows at the same goal share one count', async page => {
   await login(page)
   const w = await window2(page, APP)
   await see(w, '#goals', /pushups/)
   await page.bringToFront()
   await tap(page, '#bigbut', 10)
   await w.bringToFront()
-  await see(w, '#bigbut', '0')
+  await see(w, '#bigbut', '10')
   await tap(w, '#bigbut')
-  await see(w, '#bigbut', '1')
+  await see(w, '#bigbut', '11')
   await page.bringToFront()
-  await see(page, '#bigbut', '10')
+  await see(page, '#bigbut', '11')
   await page.reload()
-  await see(page, '#bigbut', '10')
+  await see(page, '#bigbut', '11')
   await w.reload()
-  await see(w, '#bigbut', '1')
+  await see(w, '#bigbut', '11')
   const w3 = await window2(page, APP)
   await see(w3, '#goals', /pushups/)
-  await see(w3, '#bigbut', '0')
+  await see(w3, '#bigbut', '11')
 })
 
 // Replicata: tap 12345 times.
@@ -1452,7 +1455,9 @@ test('in an installed app too, the big button keeps its touches', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'tallybee-quals-'))
   // (The app window opens at TallyBee's URL before the routes below can answer
   // for it, so the host resolver rules keep it off the network.)
-  const context = await chromium.launchPersistentContext(dir, { channel: 'chrome',
+  // Playwright's full bundled Chromium supports --app; its headless shell
+  // does not. This channel does not select the installed Google Chrome.
+  const context = await chromium.launchPersistentContext(dir, { channel: 'chromium',
     args: [`--app=${APP}`, '--host-resolver-rules=MAP * ~NOTFOUND'],
     viewport: PHONE, serviceWorkers: 'block' })
   await roboto(context)
@@ -1838,28 +1843,32 @@ qual('Submit sends the count from when it was tapped, even while waiting its tur
 // (see "each TallyBee window has its own count"), 2, tapped before its Clear,
 // which clears that, leaving the first window's 3 to go, and its UNDO brings
 // the 2 back
-qual('Clear in another window during a submission clears only its own count', async (page, bee) => {
+// SPEC CHANGE (shared goals, 2026-11-07): the shared 5 is cleared, then one
+// new tap starts the replacement tally. The older reply must leave that 1
+// intact.
+qual('a Submit reply leaves a tally replaced by another window intact', async (page, bee) => {
   await login(page)
   const w = await window2(page, APP)
   await see(w, '#goals', /pushups/)
   const [shut, open] = gate()
   bee.reply = c => c.method === 'POST' ? shut : null
-  await page.bringToFront()
-  await tap(page, '#bigbut', 3)
-  await tap(page, '#subbut')
-  await calls(page, bee, 2 * LOAD + 1)
-  await w.bringToFront()
-  await tap(w, '#bigbut', 2)
-  await clear(w) // FINAL DESIGN
-  open(null)
-  await see(w, '#bigbut', '0')
-  await page.bringToFront()
-  await see(page, '#bigbut', '0')
-  await see(page, '#status', /pushups/)
-  assert.deepEqual(values(bee), ['3'])
-  await w.bringToFront()
-  await tap(w, '#undobut')
-  await see(w, '#bigbut', '2')
+  try {
+    await page.bringToFront()
+    await tap(page, '#bigbut', 3)
+    await tap(page, '#subbut')
+    await calls(page, bee, 2 * LOAD + 1)
+    await w.bringToFront()
+    await tap(w, '#bigbut', 2)
+    await see(w, '#bigbut', '5')
+    await clear(w) // FINAL DESIGN
+    await tap(w, '#bigbut')
+    open(null)
+    await see(w, '#bigbut', '1')
+    await page.bringToFront()
+    await see(page, '#bigbut', '1')
+    await see(page, '#status', /pushups/)
+    assert.deepEqual(values(bee), ['3'])
+  } finally { open(null) }
 })
 
 // Replicata: TallyBee in two windows on pushups. In one, tap 3 and Submit; in
@@ -1872,28 +1881,58 @@ qual('Clear in another window during a submission clears only its own count', as
 // own (see "each TallyBee window has its own count"), 2, tapped before its
 // Submit, which sends that, once the first window's 3 have gone: two
 // datapoints, each with a requestid of its own, and both windows at 0
-qual("Submit in another window during a submission sends that window's own count", async (page, bee) => {
+// SPEC CHANGE (shared goals, 2026-11-07): either window may prevent or
+// serialize the second Submit. The effective datapoints plus the remaining
+// tally must still account for exactly the 5 taps, with no negative tally.
+qual('concurrent Submits account for every shared tap exactly once', async (page, bee) => {
   await login(page)
   const w = await window2(page, APP)
   await see(w, '#goals', /pushups/)
   const [shut, open] = gate()
   bee.reply = c => c.method === 'POST' ? shut : null
-  await page.bringToFront()
-  await tap(page, '#bigbut', 3)
-  await tap(page, '#subbut')
-  await calls(page, bee, 2 * LOAD + 1)
-  await w.bringToFront()
-  await see(w, '#bigbut', '0')
-  await tap(w, '#bigbut', 2)
-  await tap(w, '#subbut')
-  open(null)
-  await see(w, '#status', /✓/)
-  await see(w, '#bigbut', '0')
-  await page.bringToFront()
+  const errors = []
+  const record = e => errors.push(e.message)
+  w.on('pageerror', record)
+  try {
+    await page.bringToFront()
+    await tap(page, '#bigbut', 3)
+    await tap(page, '#subbut')
+    await calls(page, bee, 2 * LOAD + 1)
+    await w.bringToFront()
+    await see(w, '#bigbut', '3')
+    await tap(w, '#bigbut', 2)
+    // A disabled Submit is allowed to ignore this attempted concurrent press.
+    await w.$eval('#subbut', b => b.click())
+    await frames(w)
+    // A loud refusal is also allowed, but only an error from this window
+    // whose exact message is visible; unrelated uncaught errors still fail.
+    for (const message of errors) {
+      await see(w, '#status', 'Error: ' + message)
+      const i = bee.errors.indexOf(message)
+      assert.ok(i >= 0, message)
+      bee.errors.splice(i, 1)
+    }
+  } finally {
+    w.off('pageerror', record)
+    open(null)
+  }
+  await settled(w)
+  // One requestid updates one datapoint, so count the fake's effective saved
+  // datapoints, not the sum of all POST attempts.
+  const sent = () => Object.values(bee.saved)
+    .reduce((sum, d) => sum + Number(d.value), 0)
+  const remaining = await count(w)
+  assert.ok(remaining >= 0, 'the remaining shared tally is nonnegative')
+  assert.equal(await count(page), remaining)
+  assert.equal(sent() + remaining, 5)
+  // A blocked or refused second Submit may leave taps to send afterwards.
+  if (remaining !== 0) {
+    await tap(w, '#subbut')
+    await see(w, '#bigbut', '0')
+    await settled(w)
+  }
   await see(page, '#bigbut', '0')
-  assert.deepEqual(values(bee), ['3', '2'])
-  const [a, b] = posts(bee).map(p => p.params.requestid)
-  assert.notEqual(a, b)
+  assert.equal(sent(), 5)
 })
 
 // Replicata: TallyBee open in two windows, like two goals' apps on a phone.
@@ -1936,21 +1975,26 @@ qual('a window frozen in the background holds up no Submit in another', async (p
 // nothing to do but wait. The goals load waited for its turn, which went by a
 // lock shared by all TallyBee windows (see enqueue in script.js), held by the
 // frozen window's Submit.
+// SPEC CHANGE (shared goals, 2026-11-07): different goals remain independent
+// while one window is frozen.
 qual('a window frozen while it submits holds up no window opened after it', async (page, bee) => {
+  bee.goals.push({ ...structuredClone(GOALS[0]), slug: 'situps' })
   await login(page)
   const [shut, open] = gate()
   bee.reply = c => c.method === 'POST' ? shut.then(() => null) : null
-  await tap(page, '#bigbut', 2)
-  await tap(page, '#subbut')
-  await calls(page, bee, LOAD + 1)
-  await freeze(page)
-  open()
-  const w = await window2(page, alice('pushups'))
-  await see(w, '#goalname', 'alice/pushups')
-  await tap(w, '#bigbut', 3)
-  await tap(w, '#subbut')
-  await see(w, '#status', /✓/)
-  assert.deepEqual(values(bee), ['2', '3'])
+  try {
+    await tap(page, '#bigbut', 2)
+    await tap(page, '#subbut')
+    await calls(page, bee, LOAD + 1)
+    await freeze(page)
+    open()
+    const w = await window2(page, alice('situps'))
+    await see(w, '#goalname', 'alice/situps')
+    await tap(w, '#bigbut', 3)
+    await tap(w, '#subbut')
+    await see(w, '#status', /✓/)
+    assert.deepEqual(values(bee), ['2', '3'])
+  } finally { open(null) }
 })
 
 // Replicata: tap 2 and Submit, with Beeminder slow to answer; the page then
@@ -1959,22 +2003,27 @@ qual('a window frozen while it submits holds up no window opened after it', asyn
 // Expectata: 0, then 3, at once.
 // Resultata (with one lock for all windows, and Clear waiting its turn): 3,
 // for as long as the first window stayed frozen.
+// SPEC CHANGE (shared goals, 2026-11-07): different goals remain independent
+// while one window is frozen.
 qual('Clear and UNDO work beside a window frozen while it submits', async (page, bee) => {
+  bee.goals.push({ ...structuredClone(GOALS[0]), slug: 'situps' })
   await login(page)
   const [shut, open] = gate()
   bee.reply = c => c.method === 'POST' ? shut.then(() => null) : null
-  await tap(page, '#bigbut', 2)
-  await tap(page, '#subbut')
-  await calls(page, bee, LOAD + 1)
-  await freeze(page)
-  open()
-  const w = await window2(page, alice('pushups'))
-  await tap(w, '#bigbut', 3)
-  await see(w, '#bigbut', '3')
-  await clear(w)
-  await see(w, '#bigbut', '0')
-  await tap(w, '#undobut')
-  await see(w, '#bigbut', '3')
+  try {
+    await tap(page, '#bigbut', 2)
+    await tap(page, '#subbut')
+    await calls(page, bee, LOAD + 1)
+    await freeze(page)
+    open()
+    const w = await window2(page, alice('situps'))
+    await tap(w, '#bigbut', 3)
+    await see(w, '#bigbut', '3')
+    await clear(w)
+    await see(w, '#bigbut', '0')
+    await tap(w, '#undobut')
+    await see(w, '#bigbut', '3')
+  } finally { open(null) }
 })
 
 // Replicata: Submit over a connection that never answers.
@@ -2412,31 +2461,35 @@ qual('UNDO undoes a typed number whole, not a keystroke', async page => {
 // Submit sent the 3 again.
 // SPEC CHANGE (windows, 2026-10-13): the other window's count is its own (see "each
 // TallyBee window has its own count"), 0, not the 3, all along
+// SPEC CHANGE (shared goals, 2026-11-07): the second window sees the shared 3
+// before the reply; UNDO still cannot restore submitted taps.
 qual("UNDO of an edit can't bring back taps another window submitted meanwhile", async (page, bee) => {
   await login(page)
   const w = await window2(page, APP)
   await see(w, '#goals', /pushups/)
   const [shut, open] = gate()
   bee.reply = c => c.method === 'POST' ? shut.then(() => null) : null
-  await page.bringToFront()
-  await tap(page, '#bigbut', 3)
-  await tap(page, '#subbut')
-  await calls(page, bee, 2 * LOAD + 1)
-  await w.bringToFront()
-  await see(w, '#bigbut', '0')
-  await tap(w, '#num')
-  open()
-  await see(page, '#status', /pushups/)
-  await see(w, '#num', '0')
-  await w.keyboard.press('ControlOrMeta+A')
-  await w.keyboard.type('7')
-  await w.keyboard.press('Enter')
-  await see(w, '#bigbut', '7')
-  await tap(w, '#undobut')
-  await see(w, '#bigbut', '0')
-  await tap(w, '#subbut')
-  await see(w, '#status', /pushups/)
-  assert.deepEqual(values(bee), ['3', '0'])
+  try {
+    await page.bringToFront()
+    await tap(page, '#bigbut', 3)
+    await tap(page, '#subbut')
+    await calls(page, bee, 2 * LOAD + 1)
+    await w.bringToFront()
+    await see(w, '#bigbut', '3')
+    await tap(w, '#num')
+    open()
+    await see(page, '#status', /pushups/)
+    await see(w, '#num', '0')
+    await w.keyboard.press('ControlOrMeta+A')
+    await w.keyboard.type('7')
+    await w.keyboard.press('Enter')
+    await see(w, '#bigbut', '7')
+    await tap(w, '#undobut')
+    await see(w, '#bigbut', '0')
+    await tap(w, '#subbut')
+    await see(w, '#status', /pushups/)
+    assert.deepEqual(values(bee), ['3', '0'])
+  } finally { open(null) }
 })
 
 // Replicata: TallyBee in two windows. In one, tap 3 and Submit, with Beeminder
@@ -2452,32 +2505,36 @@ qual("UNDO of an edit can't bring back taps another window submitted meanwhile",
 // own (see "each TallyBee window has its own count"), so the first window's
 // Submit leaves its 7 as it is, and its edit whole: 72, and then UNDO takes
 // the whole edit back, to 0, the count as it was before it
-qual("another window's Submit leaves an edit under way whole, for UNDO", async (page, bee) => {
+// SPEC CHANGE (shared goals, 2026-11-07): sending 3 changes the shared 7 to
+// 4. Typing 2 makes 42; UNDO restores the post-Submit 4.
+qual("UNDO takes back what was typed after another window submitted mid-edit", async (page, bee) => {
   await login(page)
   const w = await window2(page, APP)
   await see(w, '#goals', /pushups/)
   const [shut, open] = gate()
   bee.reply = c => c.method === 'POST' ? shut.then(() => null) : null
-  await page.bringToFront()
-  await tap(page, '#bigbut', 3)
-  await tap(page, '#subbut')
-  await calls(page, bee, 2 * LOAD + 1)
-  await w.bringToFront()
-  await see(w, '#bigbut', '0')
-  await tap(w, '#num')
-  await w.keyboard.press('ControlOrMeta+A')
-  await w.keyboard.type('7')
-  await see(w, '#bigbut', '7')
-  open()
-  await see(page, '#status', /pushups/)
-  await see(w, '#num', '7')
-  await w.keyboard.press('End')
-  await w.keyboard.type('2')
-  await see(w, '#bigbut', '72')
-  await w.keyboard.press('Enter')
-  assert.ok(!await disabled(w, '#undobut'), 'UNDO, for the edit')
-  await tap(w, '#undobut')
-  await see(w, '#bigbut', '0')
+  try {
+    await page.bringToFront()
+    await tap(page, '#bigbut', 3)
+    await tap(page, '#subbut')
+    await calls(page, bee, 2 * LOAD + 1)
+    await w.bringToFront()
+    await see(w, '#bigbut', '3')
+    await tap(w, '#num')
+    await w.keyboard.press('ControlOrMeta+A')
+    await w.keyboard.type('7')
+    await see(w, '#bigbut', '7')
+    open()
+    await see(page, '#status', /pushups/)
+    await see(w, '#num', '4')
+    await w.keyboard.press('End')
+    await w.keyboard.type('2')
+    await see(w, '#bigbut', '42')
+    await w.keyboard.press('Enter')
+    assert.ok(!await disabled(w, '#undobut'), 'UNDO, for the edit')
+    await tap(w, '#undobut')
+    await see(w, '#bigbut', '4')
+  } finally { open(null) }
 })
 
 // Replicata: open TallyBee, logged out (or with no connection), tap 2, type 7
@@ -3202,7 +3259,9 @@ qual('the time in the comment is when Submit was pressed, even if it waits its t
 // all TallyBee windows share it": each window has its own (see "each TallyBee
 // window has its own count"), so none in the other window, and its comment
 // there only
-qual('the comment survives reloading, and each TallyBee window has its own', async page => {
+// SPEC CHANGE (shared goals, 2026-11-07): windows at the same goal share the
+// comment, including after reloading.
+qual('the comment survives reloading, and windows at the same goal share it', async page => {
   await login(page)
   await tap(page, '#comment')
   await page.keyboard.type('set 1')
@@ -3211,13 +3270,14 @@ qual('the comment survives reloading, and each TallyBee window has its own', asy
   await see(page, '#comment', 'set 1')
   const w = await window2(page, APP)
   await see(w, '#goals', /pushups/)
-  await see(w, '#comment', '')
+  await see(w, '#comment', 'set 1')
   await w.bringToFront()
   await remark(w, 'set 2')
   await page.bringToFront()
+  await see(page, '#comment', 'set 2')
   await page.reload()
   await see(page, '#goals', /pushups/)
-  await see(page, '#comment', 'set 1')
+  await see(page, '#comment', 'set 2')
 })
 
 // Replicata: type a comment, tap 3, and Submit; then type another comment, tap
@@ -3388,28 +3448,32 @@ qual('UNDO of a comment edit puts back the comment, and only the comment', async
 // focus, before the Submit got there, to go with the next datapoint too.
 // SPEC CHANGE (windows, 2026-10-13): the other window's comment is its own (see "each
 // TallyBee window has its own count"), none, not "set 1", all along
+// SPEC CHANGE (shared goals, 2026-11-07): the second window sees the shared
+// comment before the reply; UNDO must not restore it afterwards.
 qual("UNDO of an edit can't bring back a comment another window submitted meanwhile", async (page, bee) => {
   await login(page)
   const w = await window2(page, APP)
   await see(w, '#goals', /pushups/)
   const [shut, open] = gate()
   bee.reply = c => c.method === 'POST' ? shut.then(() => null) : null
-  await page.bringToFront()
-  await remark(page, 'set 1')
-  await tap(page, '#bigbut', 3)
-  await tap(page, '#subbut')
-  await calls(page, bee, 2 * LOAD + 1)
-  await w.bringToFront()
-  await see(w, '#comment', '')
-  await tap(w, '#comment')
-  open()
-  await see(page, '#status', /pushups/)
-  await see(w, '#comment', '')
-  await w.keyboard.type('x')
-  await w.keyboard.press('Enter')
-  await see(w, '#comment', 'x')
-  await tap(w, '#undobut')
-  await see(w, '#comment', '')
+  try {
+    await page.bringToFront()
+    await remark(page, 'set 1')
+    await tap(page, '#bigbut', 3)
+    await tap(page, '#subbut')
+    await calls(page, bee, 2 * LOAD + 1)
+    await w.bringToFront()
+    await see(w, '#comment', 'set 1')
+    await tap(w, '#comment')
+    open()
+    await see(page, '#status', /pushups/)
+    await see(w, '#comment', '')
+    await w.keyboard.type('x')
+    await w.keyboard.press('Enter')
+    await see(w, '#comment', 'x')
+    await tap(w, '#undobut')
+    await see(w, '#comment', '')
+  } finally { open(null) }
 })
 
 // Replicata: type in the comment field and then, without pressing Enter, tap
@@ -3608,23 +3672,27 @@ qual('the comment field is grayed out while Beeminder takes the datapoint', asyn
 // TallyBee window has its own count"), so this window's stays "first"
 // SPEC CHANGE (via, 2026-10-13): no "via TallyBee at" and the time after
 // the comment (decided with the person working on this, AGENTS.md N7): just "first"
+// SPEC CHANGE (shared goals, 2026-11-07): the other window changes the shared
+// field, but the queued Submit sends the comment captured when pressed.
 qual('Submit sends the comment as it was when pressed, even while waiting its turn', async (page, bee) => {
   await login(page)
   await remark(page, 'first')
   const [shut, open] = gate()
   bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
-  await comeback(page)
-  await calls(page, bee, LOAD + 2)
-  await tap(page, '#bigbut', 3)
-  await tap(page, '#subbut')
-  const w = await window2(page, APP)
-  await w.bringToFront()
-  await remark(w, 'second')
-  await page.bringToFront()
-  await see(page, '#comment', 'first')
-  open()
-  await see(page, '#bigbut', '0')
-  assert.equal(posts(bee)[0].params.comment, 'first')
+  try {
+    await comeback(page)
+    await calls(page, bee, LOAD + 2)
+    await tap(page, '#bigbut', 3)
+    await tap(page, '#subbut')
+    const w = await window2(page, APP)
+    await w.bringToFront()
+    await remark(w, 'second')
+    await page.bringToFront()
+    await see(page, '#comment', 'second')
+    open()
+    await see(page, '#bigbut', '0')
+    assert.equal(posts(bee)[0].params.comment, 'first')
+  } finally { open(null) }
 })
 
 // Replicata: on a phone, type a comment, and press the keyboard's done key.
@@ -4054,6 +4122,8 @@ qual("the goal's link, under the dropdown, says where it goes: beeminder.com/USE
 // tab remembers the goals as they last loaded, till they load again.
 // Resultata (before): 0, from index.html, then 3, the count with no goal to
 // build on, before 123.
+// SPEC CHANGE (shared goals, 2026-11-07): switching keeps each goal's tally;
+// untouched pages starts at 120, while pushups keeps 3.
 qual('picking a goal shows no number in between', async (page, bee) => {
   await page.context().addInitScript(() => {
     window.counts = [] // each number the big button shows, in turn
@@ -4066,13 +4136,15 @@ qual('picking a goal shows no number in between', async (page, bee) => {
   await tap(page, '#bigbut', 3)
   const [shut, open] = gate()
   bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
-  await menu(page) // SPEC CHANGE (menu, 2026-10-08): the dropdown is in the menu
-  await page.selectOption('#goals', 'pages')
-  await page.waitForURL(alice('pages')) // SPEC CHANGE (paths, 2026-11-04): was ?goal=pages
-  await see(page, '#bigbut', '123')
-  open()
-  await settled(page)
-  assert.deepEqual(await page.evaluate(() => window.counts), ['123'])
+  try {
+    await menu(page) // SPEC CHANGE (menu, 2026-10-08): the dropdown is in the menu
+    await page.selectOption('#goals', 'pages')
+    await page.waitForURL(alice('pages')) // SPEC CHANGE (paths, 2026-11-04): was ?goal=pages
+    await see(page, '#bigbut', '120')
+    open()
+    await settled(page)
+    assert.deepEqual(await page.evaluate(() => window.counts), ['120'])
+  } finally { open(null) }
 })
 
 // Replicata: pick pages in the dropdown, in the menu, on a slow connection.
@@ -4415,7 +4487,7 @@ qual("the page starts with no app manifest, so that Safari reads its goal's", as
 // now comes, as GitHub Pages serves it, as 404.html, under a 404
 test('Chrome has no complaint about TallyBee as an app', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'tallybee-quals-'))
-  const context = await chromium.launchPersistentContext(dir, { channel: 'chrome' })
+  const context = await chromium.launchPersistentContext(dir)
   await roboto(context)
   try {
     await localhost(async url => {
@@ -7022,7 +7094,9 @@ qual('screen readers hear the count after −1, UNDO and Clear', async page => {
 // for today, with its taps still there to undo.
 // Resultata (before): one count, day and UNDO for both windows: the first at
 // 4 after the other's UNDOs.
-qual('each TallyBee window has its own day and UNDO', async page => {
+// SPEC CHANGE (shared goals, 2026-11-07): the day and UNDO belong to the
+// shared tally; both windows see each change.
+qual('windows at the same goal share their day and UNDO', async page => {
   await page.clock.setFixedTime(NOON)
   await login(page)
   const w = await window2(page, APP)
@@ -7035,15 +7109,15 @@ qual('each TallyBee window has its own day and UNDO', async page => {
   await tap(w, '#undobut')
   assert.ok(await till(w, async () => await w.inputValue('#day') === '20261002'),
             'UNDO takes back the pick of the day')
-  await see(w, '#bigbut', '2')
+  await see(w, '#bigbut', '5')
   await tap(w, '#undobut')
-  await see(w, '#bigbut', '1')
+  await see(w, '#bigbut', '4')
   await page.bringToFront()
-  await see(page, '#bigbut', '3')
+  await see(page, '#bigbut', '4')
   assert.equal(await page.inputValue('#day'), '20261002')
   assert.ok(!await disabled(page, '#undobut'))
   await tap(page, '#undobut')
-  await see(page, '#bigbut', '2')
+  await see(page, '#bigbut', '3')
 }, TOKYO)
 
 // Replicata: TallyBee from before each window had its own count left a count
@@ -7052,15 +7126,17 @@ qual('each TallyBee window has its own day and UNDO', async page => {
 // Expectata: the 5 in the first window, comment, day and all; 0 in the
 // other, with no comment, for today, so that the 5 can't go twice.
 // Resultata (before): the 5 in both, as they shared one count.
-qual('a count left from before windows had their own goes to the first window only', async page => {
+// SPEC CHANGE (shared goals, 2026-11-07): all windows at the goal share the
+// migrated tally.
+qual('a count left from before windows had their own is shared at its goal', async page => {
   await page.clock.setFixedTime(NOON)
   await page.goto(APP)
   await see(page, '#bigbut', '5')
   await see(page, '#comment', 'old')
   const w = await window2(page, APP)
-  await see(w, '#bigbut', '0')
-  await see(w, '#comment', '')
-  assert.equal((await tallied(w)).day, null)
+  await see(w, '#bigbut', '5')
+  await see(w, '#comment', 'old')
+  assert.equal((await tallied(w)).day, '20261001')
   assert.equal((await tallied(page)).day, '20261001')
 }, { ...TOKYO, ...older({ count: 5, requestid: 'r-old', pin: null, // see OLDER
                            comment: 'old', day: '20261001', undos: [],
@@ -7117,7 +7193,9 @@ qual('TallyBee closed and opened again has its count back, UNDO and all', async 
 // Expectata: the 5, from the window whose count changed last. (Only one
 // count can come back, and that one's is the one TallyBee remembers.)
 // Resultata (in the build where each window started at 0): 0.
-qual('with two windows closed, TallyBee opened again has the count that changed last', async page => {
+// SPEC CHANGE (shared goals, 2026-11-07): all 8 taps survive; opening a
+// window or loading goals never overwrites them.
+qual('with two windows closed, TallyBee opened again has all their taps', async page => {
   await login(page)
   const w = await window2(page, APP)
   await see(w, '#goals', /pushups/)
@@ -7131,7 +7209,7 @@ qual('with two windows closed, TallyBee opened again has the count that changed 
   const again = await context.newPage()
   await again.goto(APP)
   await see(again, '#goals', /pushups/)
-  await see(again, '#bigbut', '5')
+  await see(again, '#bigbut', '8')
 })
 
 // --------------------------------------------------- code review (2026-10-13)
@@ -7228,6 +7306,8 @@ qual('the app manifest is there, for the goal, by the time the page has loaded',
 // matters to a window with no count of its own: on a computer with its CPU
 // slowed 6 times, about 220ms from the page showing till it worked, against
 // about 80ms.
+// SPEC CHANGE (shared goals, 2026-11-07): switching to untouched pages shows
+// its own reading, 120; pushups keeps 3.
 qual('a reload, or picking a goal, works as soon as the page has loaded', async page => {
   await atload(page)
   await login(page)
@@ -7235,7 +7315,7 @@ qual('a reload, or picking a goal, works as soon as the page has loaded', async 
   await page.reload()
   assert.equal((await page.evaluate(() => window.atload))[1], '3')
   await choose(page, 'pages')
-  assert.equal((await page.evaluate(() => window.atload))[1], '123')
+  assert.equal((await page.evaluate(() => window.atload))[1], '120')
 })
 
 // Replicata: open TallyBee in a new window, with script.js slow to come, and
@@ -7295,7 +7375,7 @@ qual('an error while TallyBee starts shows, rather than the infinibee', async (p
 // Expectata: an error, in plain view, in words, and no infinibee.
 // Resultata (in a mutant with nothing on the script's onerror): the infinibee
 // flying forever.
-for (const file of ['script.js', 'beeminder.js'])
+for (const file of ['script.js', 'beeminder.js', 'journal.js', 'tally.js'])
   qual(`if ${file} can't load, TallyBee says so, rather than showing the infinibee`, async page => {
     await page.context().route(APP + file, r => r.fulfill({ status: 404, body: 'Not found' }))
     await page.goto(APP)
@@ -7316,7 +7396,9 @@ for (const file of ['script.js', 'beeminder.js'])
 // loading the goals saved the window's own count too (see update in
 // script.js), as what TallyBee remembers for a window that opens with none of
 // its own.
-qual('with two windows closed, TallyBee opened again has the count that changed last, though the other window loaded the goals since', async (page, bee) => {
+// SPEC CHANGE (shared goals, 2026-11-07): all 8 taps survive; opening a
+// window or loading goals never overwrites them.
+qual('with two windows closed, TallyBee opened again has all their taps, though the other window loaded the goals since', async (page, bee) => {
   await login(page)
   const w = await window2(page, APP)
   await see(w, '#goals', /pushups/)
@@ -7335,7 +7417,7 @@ qual('with two windows closed, TallyBee opened again has the count that changed 
   const again = await context.newPage()
   await again.goto(APP)
   await see(again, '#goals', /pushups/)
-  await see(again, '#bigbut', '5')
+  await see(again, '#bigbut', '8')
 })
 
 // Replicata: tap 7 in TallyBee at a goal, pushups, as in that goal's app;
@@ -7417,4 +7499,603 @@ qual('after all its windows close, each goal gets its own count back', async (pa
   const s = await window2(p, alice('situps'))
   await see(s, '#goalname', 'alice/situps')
   await see(s, '#bigbut', '2')
+})
+
+// ------------------------------------------ tally retention (2026-11-07)
+
+// Replicata: save 7 pushups with a comment and yesterday selected; leave a
+// second window at pushups open, close the counting window, and reopen it
+// using each supported form of the goal's link.
+// Expectata: 7, its comment, day and UNDO; the next tap survives another close.
+// Resultata (before): 0, because the surviving window holds the goal's OPEN
+// lock, even though the durable copy still contains 7.
+for (const url of [alice('pushups'), APP + '?goal=pushups', APP])
+  qual(`a saved tally returns beside a surviving window (${url})`, async page => {
+    await page.clock.setFixedTime(NOON)
+    await login(page)
+    await tap(page, '#bigbut', 7)
+    await remark(page, 'unfinished set')
+    await page.selectOption('#day', '20261001')
+    const other = await window2(page, alice('pushups'))
+    await see(other, '#goals', /pushups/)
+    await settled(other)
+    const context = page.context()
+    await page.close()
+    const again = await context.newPage()
+    await again.clock.setFixedTime(NOON)
+    await again.goto(url)
+    await see(again, '#bigbut', '7')
+    await see(again, '#comment', 'unfinished set')
+    assert.equal(await again.inputValue('#day'), '20261001')
+    await tap(again, '#undobut')
+    assert.equal(await again.inputValue('#day'), '20261002')
+    await tap(again, '#undobut')
+    await see(again, '#comment', '')
+    await tap(again, '#bigbut')
+    await see(again, '#bigbut', '8')
+    await again.close()
+    const last = await context.newPage()
+    await last.goto(alice('pushups'))
+    await see(last, '#bigbut', '8')
+    await see(other, '#bigbut', '8')
+  }, TOKYO)
+
+// Replicata: save 7, open another window at the same goal, discard the first
+// window's session storage and reload it (a replacement document with only
+// durable storage left).
+// Expectata: 7 in both windows, including after another full close and reopen.
+// Resultata (before): 0 in the replacement document.
+qual('discarding session storage cannot hide a saved tally', async page => {
+  await login(page)
+  await tap(page, '#bigbut', 7)
+  const other = await window2(page, alice('pushups'))
+  await see(other, '#goals', /pushups/)
+  await settled(other)
+  await page.evaluate(() => sessionStorage.clear())
+  await page.reload()
+  await see(page, '#bigbut', '7')
+  await see(other, '#bigbut', '7')
+  const context = page.context()
+  await page.close()
+  await other.close()
+  const again = await context.newPage()
+  await again.goto(alice('pushups'))
+  await see(again, '#bigbut', '7')
+})
+
+// Replicata: save 7, freeze that window, and open the same goal elsewhere.
+// Expectata: the saved 7 immediately available, without the frozen window
+// running any script or answering any message.
+// Resultata (before): 0, from the OPEN-lock heuristic.
+qual('a frozen window cannot hide the tally from a new window', async page => {
+  await login(page)
+  await tap(page, '#bigbut', 7)
+  await settled(page)
+  await freeze(page)
+  const other = await window2(page, alice('pushups'))
+  await see(other, '#bigbut', '7')
+  await tap(other, '#bigbut')
+  await see(other, '#bigbut', '8')
+  await other.reload()
+  await see(other, '#bigbut', '8')
+})
+
+// Replicata: load a blank page, then TallyBee, count and type a comment, go
+// Back to the blank page, then Forward to TallyBee.
+// Expectata: the count and final comment character, plus working UNDO.
+// Resultata (a regression to guard against): history navigation drops state.
+// This exercises browser history; it does not impersonate Android's native
+// Back gesture or the lifetime of an installed app's activity.
+qual('Back and Forward retain the tally and the final comment character', async page => {
+  await login(page)
+  const away = APP + 'qual-away.html'
+  await page.context().route(away, r => r.fulfill({ contentType: 'text/html',
+    body: '<!doctype html><title>Qual away</title>' }))
+  await page.goto(away)
+  await page.goto(alice('pushups'))
+  await see(page, '#goals', /pushups/)
+  await tap(page, '#bigbut', 7)
+  await remark(page, 'last character!')
+  await page.goBack()
+  assert.equal(page.url(), away)
+  await page.goForward()
+  await see(page, '#bigbut', '7')
+  await see(page, '#comment', 'last character!')
+  await tap(page, '#undobut')
+  await see(page, '#comment', '')
+  await tap(page, '#undobut')
+  await see(page, '#bigbut', '6')
+})
+
+// Replicata: start at 3, dispatch one input action and reload in the same
+// JavaScript task, with no wait for a save callback, timer, or next frame.
+// Expectata: the entire action survives. Clear remains undoable.
+// Resultata (the rejected asynchronous-save prototype): the final action
+// can disappear because the page leaves before its queued write runs.
+for (const [action, expected, comment, day] of [
+  ['tap', '4', '', '20261002'],
+  ['keyboard', '4', '', '20261002'],
+  ['number', '17', '', '20261002'],
+  ['comment', '3', 'last character!', '20261002'],
+  ['day', '3', '', '20261001'],
+  ['Clear', '0', '', '20261002'],
+  ['UNDO', '2', '', '20261002'],
+])
+  qual(`${action} survives a reload in the same JavaScript task`, async page => {
+    await page.clock.setFixedTime(NOON)
+    await login(page)
+    await tap(page, '#bigbut', 3)
+    await Promise.all([
+      page.waitForEvent('domcontentloaded'),
+      page.evaluate(action => {
+        const field = (id, value, event) => {
+          const e = document.getElementById(id)
+          e.focus()
+          e.value = value
+          e.dispatchEvent(new Event(event, { bubbles: true }))
+        }
+        const actions = {
+          tap: () => document.getElementById('bigbut').dispatchEvent(
+            new PointerEvent('pointerup', { isPrimary: true, button: 0 })),
+          keyboard: () => document.getElementById('bigbut').dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'Enter' })),
+          number: () => field('num', '17', 'input'),
+          comment: () => field('comment', 'last character!', 'input'),
+          day: () => field('day', '20261001', 'change'),
+          Clear: () => document.getElementById('clearbut').click(),
+          UNDO: () => document.getElementById('undobut').click(),
+        }
+        actions[action]()
+        location.reload()
+      }, action),
+    ])
+    await see(page, '#bigbut', expected)
+    await see(page, '#comment', comment)
+    assert.equal(await page.inputValue('#day'), day)
+    await tap(page, '#undobut')
+    await see(page, '#bigbut', action === 'UNDO' ? '1' : '3')
+    await see(page, '#comment', '')
+    assert.equal(await page.inputValue('#day'), '20261002')
+  }, TOKYO)
+
+// Replicata: save 7; make durable writes throw; try to tap, Clear, or UNDO;
+// then close and reopen the window, which has no session copy to fall back on.
+// Expectata: an explicit error, no falsely acknowledged count change, and
+// the previous 7 still recoverable, including its last tap's UNDO.
+// Resultata (before): the error shows, but update deleted the durable record
+// before its replacement failed, so a fresh window starts at 0.
+for (const control of ['#bigbut', '#clearbut', '#undobut'])
+  qual(`a rejected durable write preserves the prior tally (${control})`, async (page, bee) => {
+    await login(page)
+    await tap(page, '#bigbut', 7)
+    await settled(page)
+    await page.evaluate(() => {
+      const set = Storage.prototype.setItem
+      Storage.prototype.setItem = function(key, value) {
+        if (this === localStorage && key.startsWith('tallybee'))
+          throw new DOMException('Qual: durable write refused', 'QuotaExceededError')
+        return set.call(this, key, value)
+      }
+    })
+    await tap(page, control)
+    await see(page, '#status', /durable write refused/)
+    await expectError(page, bee, /durable write refused/)
+    await see(page, '#bigbut', '7')
+    const context = page.context()
+    await page.close()
+    const again = await context.newPage()
+    await again.goto(alice('pushups'))
+    await see(again, '#bigbut', '7')
+    await tap(again, '#undobut')
+    await see(again, '#bigbut', '6')
+  })
+
+// Replicata: prepare 7 pushups with a comment and yesterday selected; at
+// another goal prepare 2 with its own comment; switch between both repeatedly.
+// Expectata: both complete pending datapoints remain, with independent UNDO.
+// Resultata (before): switching carries a window's tally into the other goal.
+qual('switching populated goals preserves both pending datapoints', async (page, bee) => {
+  bee.goals.push({ slug: 'situps', kyoom: true, curval: 0, deadline: 0,
+    last_datapoint: null, safesum: '+5 situps due by 12am', queued: false })
+  await page.clock.setFixedTime(NOON)
+  await login(page)
+  await tap(page, '#bigbut', 7)
+  await remark(page, 'pushup set')
+  await page.selectOption('#day', '20261001')
+  const other = await window2(page, alice('situps'))
+  await other.clock.setFixedTime(NOON)
+  await see(other, '#goalname', 'alice/situps')
+  await tap(other, '#bigbut', 2)
+  await remark(other, 'situp set')
+  await choose(page, 'situps')
+  await see(page, '#bigbut', '2')
+  await see(page, '#comment', 'situp set')
+  await choose(page, 'pushups')
+  await see(page, '#bigbut', '7')
+  await see(page, '#comment', 'pushup set')
+  assert.equal(await page.inputValue('#day'), '20261001')
+  await tap(page, '#undobut')
+  assert.equal(await page.inputValue('#day'), '20261002')
+  await choose(page, 'situps')
+  await tap(page, '#undobut')
+  await see(page, '#comment', '')
+  await tap(page, '#undobut')
+  await see(page, '#bigbut', '1')
+  await choose(page, 'pushups')
+  await see(page, '#bigbut', '7')
+  await see(page, '#comment', 'pushup set')
+}, TOKYO)
+
+// Replicata: two windows at pushups receive 100 taps each at the same time.
+// Expectata: all 200 taps in both windows and after either reloads; UNDO in
+// either window removes one shared tap, rather than a window's private tap.
+// Resultata (before): 100 in each, and the durable copy contains only 100.
+qual('simultaneous taps in two windows all reach the shared tally', async page => {
+  await login(page)
+  const other = await window2(page, alice('pushups'))
+  await see(other, '#goals', /pushups/)
+  await settled(other)
+  await Promise.all([taps(page, 100), taps(other, 100)])
+  await see(page, '#bigbut', '200')
+  await see(other, '#bigbut', '200')
+  await page.reload()
+  await see(page, '#bigbut', '200')
+  await tap(page, '#undobut')
+  await see(page, '#bigbut', '199')
+  await see(other, '#bigbut', '199')
+  await other.reload()
+  await see(other, '#bigbut', '199')
+})
+
+// Replicata: tap 7 at pushups, or at pages whose odometer starts at 120,
+// and Submit with a comment and yesterday selected. Either the
+// server refuses it, or it accepts it and the reply is lost. Leave a sibling
+// window open, close the sender, reopen the goal, and Submit again.
+// Expectata: the full pending datapoint returns; the retry uses the original
+// requestid and odometer base, leaving exactly one accepted datapoint of 7
+// or 127 and no pending taps.
+// Resultata (before): the reopened sender starts at 0 with a fresh requestid.
+for (const [slug, value, after] of [['pushups', 7, '0'], ['pages', 127, '127']])
+for (const [outcome, reply, error] of [
+  ['refused send', () => [503, { errors: { message: 'Qual: unavailable' } }], /503/],
+  ['lost reply', (bee, call) => { defaultReply(bee, call); return 'abort' }, /fetch/i],
+])
+  qual(`reopening beside another window retains a ${outcome} for an idempotent retry (${slug})`, async (page, bee) => {
+    await page.clock.setFixedTime(NOON)
+    await login(page)
+    await page.goto(alice(slug))
+    await see(page, '#goalname', `alice/${slug}`)
+    await tap(page, '#bigbut', 7)
+    await remark(page, 'unfinished set')
+    await page.selectOption('#day', '20261001')
+    const other = await window2(page, alice(slug))
+    await see(other, '#goals', /pushups/)
+    bee.reply = c => c.method === 'POST' ? reply(bee, c) : null
+    await page.bringToFront()
+    await tap(page, '#subbut')
+    await expectError(page, bee, error)
+    const requestid = posts(bee)[0].params.requestid
+    const context = page.context()
+    await page.close()
+    bee.reply = () => null
+    const again = await context.newPage()
+    await again.clock.setFixedTime(NOON)
+    await again.goto(alice(slug))
+    await see(again, '#goals', /pushups/)
+    await see(again, '#bigbut', String(value))
+    await see(again, '#comment', 'unfinished set')
+    assert.equal(await again.inputValue('#day'), '20261001')
+    await tap(again, '#subbut')
+    await see(again, '#status', /✓/)
+    await see(again, '#bigbut', after)
+    await see(other, '#bigbut', after)
+    assert.deepEqual(posts(bee).map(p => p.params.requestid), [requestid, requestid])
+    assert.deepEqual(Object.values(bee.saved).map(d =>
+      [d.value, d.comment, d.daystamp]), [[value, 'unfinished set', '20261001']])
+  }, TOKYO)
+
+// Replicata: A submits 3; while the reply waits, B taps twice on the same
+// goal; then the reply arrives. Close both and reopen the goal.
+// Expectata: both show 5 before the reply and 2 after it; the accepted 3
+// never consume the two later taps, which survive the full close.
+// Resultata (before): B has its private 2 and A shows 0 after success.
+qual('taps made in another window during Submit remain after success and reopening', async (page, bee) => {
+  await login(page)
+  const other = await window2(page, alice('pushups'))
+  await see(other, '#goals', /pushups/)
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'POST' ? shut : null
+  try {
+    await page.bringToFront()
+    await tap(page, '#bigbut', 3)
+    await tap(page, '#subbut')
+    await calls(page, bee, 2 * LOAD + 1)
+    await other.bringToFront()
+    await tap(other, '#bigbut', 2)
+    await see(other, '#bigbut', '5')
+    open(null)
+    await see(page, '#status', /✓/)
+    await see(page, '#bigbut', '2')
+    await see(other, '#bigbut', '2')
+    assert.deepEqual(Object.values(bee.saved).map(d => d.value), [3])
+    const context = page.context()
+    await page.close()
+    await other.close()
+    const again = await context.newPage()
+    await again.goto(alice('pushups'))
+    await see(again, '#bigbut', '2')
+  } finally { open(null) }
+})
+
+// Replicata: save 7 and then one more tap. Refuse writes only to the shared
+// preferences, and fold the footer. Close the window and open the goal again.
+// Expectata: the acknowledged 8 survives, despite the separate write error.
+// Resultata (a regression to guard against): an error rolls back or hides an
+// already committed tally.
+qual('a preference write failure cannot erase an already saved tap', async (page, bee) => {
+  await login(page)
+  await tap(page, '#bigbut', 7)
+  await tap(page, '#bigbut')
+  await see(page, '#bigbut', '8')
+  await settled(page)
+  await page.evaluate(() => {
+    const set = Storage.prototype.setItem
+    Storage.prototype.setItem = function(key, value) {
+      if (this === localStorage && key === 'tallybee-shared')
+        throw new DOMException('Qual: preference write refused', 'QuotaExceededError')
+      return set.call(this, key, value)
+    }
+  })
+  await tap(page, '#foldbut')
+  await see(page, '#status', /preference write refused/)
+  await expectError(page, bee, /preference write refused/)
+  await see(page, '#bigbut', '8')
+  const context = page.context()
+  await page.close()
+  const again = await context.newPage()
+  await again.goto(alice('pushups'))
+  await see(again, '#bigbut', '8')
+})
+
+// Replicata: a legacy window has 7, a comment, yesterday and one undo frame;
+// its durable destination is untouched. Reload into the shared-tally release.
+// Expectata: the complete pending datapoint imports durably, and UNDO gives 6.
+// Resultata (without legacy-session migration): the session's 7 disappears.
+qual('legacy private tally imports into an untouched durable goal', async page => {
+  await page.goto(alice('pushups'))
+  await see(page, '#bigbut', '0')
+  await settled(page)
+  await page.evaluate(() => sessionStorage.setItem('tallybee', JSON.stringify({
+    count: 7, requestid: 'legacy-private', pin: null, comment: 'unfinished',
+    day: '20261001', undos: [{ count: 6 }], at: 'pushups',
+  })))
+  await page.reload()
+  await see(page, '#bigbut', '7')
+  await see(page, '#comment', 'unfinished')
+  assert.equal(await page.inputValue('#day'), '20261001')
+  const context = page.context()
+  await page.close()
+  const again = await context.newPage()
+  await again.goto(alice('pushups'))
+  await see(again, '#bigbut', '7')
+  await see(again, '#comment', 'unfinished')
+  await tap(again, '#undobut')
+  await see(again, '#bigbut', '6')
+})
+
+// Replicata: the durable goal has 7; an old private window instead holds 3
+// with a different comment, either under the same requestid or a different
+// one. Reload that window into the shared-tally release.
+// Expectata: a visible error and both histories preserved; reopening still
+// reports the unresolved conflict, with the durable 7 intact. A requestid
+// alone cannot prove equality.
+// Resultata (the first migration draft): matching requestids hid divergence.
+for (const same of [false, true])
+  qual(`a divergent legacy private tally is preserved and rejected (${same ? 'same requestid' : 'different requestid'})`, async (page, bee) => {
+    await login(page)
+    await tap(page, '#bigbut', 7)
+    await settled(page)
+    const saved = await tallied(page)
+    const conflicting = { count: 3,
+      requestid: same ? saved.requestid : 'legacy-conflict', pin: null,
+      comment: 'private history', day: null, undos: [{ count: 2 }], at: 'pushups' }
+    await page.evaluate(t => sessionStorage.setItem('tallybee', JSON.stringify(t)), conflicting)
+    await page.reload()
+    await see(page, '#status', /^Error: /)
+    const message = (await page.textContent('#status')).slice('Error: '.length)
+    await expectError(page, bee, new RegExp(RegExp.escape(message)))
+    // Startup's existing error renderer can itself reach an uninitialized
+    // binding; its incidental error is already covered by the startup quals.
+    for (let i = bee.errors.length - 1; i >= 0; i--)
+      if (/before initialization/.test(bee.errors[i])) bee.errors.splice(i, 1)
+    assert.ok(await page.evaluate(t => Object.keys(localStorage)
+      .filter(k => k.startsWith('tallybee-recovery '))
+      .some(k => localStorage.getItem(k) === JSON.stringify(t)), conflicting),
+      'the complete conflicting private history is archived durably')
+    const context = page.context()
+    await page.close()
+    const again = await context.newPage()
+    await again.goto(alice('pushups'))
+    await see(again, '#status', /^Error: /)
+    const reopened = (await again.textContent('#status')).slice('Error: '.length)
+    await expectError(again, bee, new RegExp(RegExp.escape(reopened)))
+    for (let i = bee.errors.length - 1; i >= 0; i--)
+      if (/before initialization/.test(bee.errors[i])) bee.errors.splice(i, 1)
+    await settled(again)
+    assert.ok(await again.evaluate(() => Object.values(
+      JSON.parse(localStorage.getItem('tallybee-state')).state.tallies)
+      .some(t => t.at === 'pushups' && t.count === 7 && t.undos.length === 7)),
+      'the complete acknowledged tally remains durable while the conflict is unresolved')
+  })
+
+// Replicata: a new-version window has 7; a surviving old-version sibling
+// writes its private 9 and comment to the former durable key.
+// Expectata: a visible error, including after reopening, the old write
+// archived, and the shared 7 intact.
+// Resultata (the first migration draft): the old window's new work was ignored.
+qual('old-version sibling writes are preserved and reported', async (page, bee) => {
+  await login(page)
+  await tap(page, '#bigbut', 7)
+  await settled(page)
+  const sibling = await window2(page, alice('pushups'))
+  await see(sibling, '#bigbut', '7')
+  const legacy = { count: 9, requestid: 'old-running-window', pin: null,
+    comment: 'old window work', day: null, undos: [{ count: 8 }], at: 'pushups' }
+  await sibling.evaluate(t => localStorage.setItem('tallybee pushups', JSON.stringify(t)), legacy)
+  await see(page, '#status', /^Error: /)
+  const message = (await page.textContent('#status')).slice('Error: '.length)
+  await expectError(page, bee, new RegExp(RegExp.escape(message)))
+  assert.ok(await page.evaluate(t => Object.keys(localStorage)
+    .filter(k => k.startsWith('tallybee-recovery '))
+    .some(k => localStorage.getItem(k) === JSON.stringify(t)), legacy),
+    'the old-version write is archived durably')
+  await see(page, '#bigbut', '7')
+  const context = page.context()
+  await page.close()
+  await sibling.close()
+  const again = await context.newPage()
+  await again.goto(alice('pushups'))
+  await see(again, '#status', /^Error: /)
+  const reopened = (await again.textContent('#status')).slice('Error: '.length)
+  await expectError(again, bee, new RegExp(RegExp.escape(reopened)))
+  for (let i = bee.errors.length - 1; i >= 0; i--)
+    if (/before initialization/.test(bee.errors[i])) bee.errors.splice(i, 1)
+  assert.ok(await again.evaluate(() => Object.values(
+    JSON.parse(localStorage.getItem('tallybee-state')).state.tallies)
+    .some(t => t.at === 'pushups' && t.count === 7)),
+    'the acknowledged shared tally remains durable across the conflict')
+})
+
+// Replicata: count 3 before selecting a goal; then open one whose name is a
+// JavaScript property name or the word null, and count 2 there.
+// Expectata: the named goal starts at 0 and retains its own 2 after reopening.
+// Resultata (the first map draft): null reused the unassigned 3; inherited
+// object properties were treated as tallies for constructor and __proto__.
+for (const slug of ['null', 'constructor', '__proto__'])
+  qual(`a goal named ${slug} has its own durable tally`, async page => {
+    await page.goto(APP)
+    await tap(page, '#bigbut', 3)
+    await page.goto(alice(slug))
+    await see(page, '#bigbut', '0')
+    await tap(page, '#bigbut', 2)
+    const context = page.context()
+    await page.close()
+    const again = await context.newPage()
+    await again.goto(alice(slug))
+    await see(again, '#bigbut', '2')
+    await tap(again, '#undobut')
+    await see(again, '#bigbut', '1')
+  })
+
+// Replicata: two legacy windows hold different pending datapoints for one
+// untouched goal, and reload into the new release together.
+// Expectata: both histories archived, a persistent conflict visible to both
+// windows, and the goal's shared state never silently replaced by a winner.
+// Resultata (an import that validates before writing but asserts on replay):
+// the second durable event can make the whole journal unreadable forever.
+qual('concurrent legacy imports preserve both histories and report their conflict', async (page, bee) => {
+  await page.goto(alice('pushups'))
+  await see(page, '#bigbut', '0')
+  const sibling = await window2(page, alice('pushups'))
+  await see(sibling, '#bigbut', '0')
+  await settled(page)
+  const histories = [3, 5].map(count => ({ count, requestid: `legacy-${count}`,
+    pin: null, comment: `private ${count}`, day: null, undos: [{ count: count - 1 }],
+    at: 'pushups' }))
+  for (const [i, p] of [page, sibling].entries())
+    await p.evaluate(t => sessionStorage.setItem('tallybee', JSON.stringify(t)), histories[i])
+  await Promise.all([page.reload(), sibling.reload()])
+  await see(page, '#status', /^Error: /)
+  await see(sibling, '#status', /^Error: /)
+  const messages = await Promise.all([page, sibling].map(p => p.textContent('#status')))
+  for (const status of messages)
+    await expectError(page, bee, new RegExp(RegExp.escape(status.slice('Error: '.length))))
+  for (let i = bee.errors.length - 1; i >= 0; i--)
+    if (/before initialization/.test(bee.errors[i])) bee.errors.splice(i, 1)
+  assert.ok(await page.evaluate(ts => ts.every(t => Object.keys(localStorage)
+    .filter(k => k.startsWith('tallybee-recovery '))
+    .some(k => localStorage.getItem(k) === JSON.stringify(t))), histories),
+    'both full histories survive in durable recovery records')
+  await settled(page)
+  assert.ok(await page.evaluate(() => Object.values(
+    JSON.parse(localStorage.getItem('tallybee-state')).state.tallies)
+    .some(t => t.at === 'pushups' && [3, 5].includes(t.count))),
+    'the journal can still checkpoint a complete tally despite the conflict')
+  // Each storage notification can report this same unresolved conflict; only
+  // errors whose exact text remains visible are expected, not arbitrary ones.
+  await frames(page)
+  const visible = await Promise.all([page, sibling].map(p => p.textContent('#status')))
+  const expected = new Set(visible.map(s => s.slice('Error: '.length)))
+  for (let i = bee.errors.length - 1; i >= 0; i--)
+    if (expected.has(bee.errors[i])) bee.errors.splice(i, 1)
+})
+
+// Replicata: a durable 7 and a private 3 have already produced a persistent
+// conflict. Another old window, holding its own 9, then reloads this release.
+// Expectata: that 9 is archived before the existing conflict stops startup.
+// Resultata (checking the book before archiving the session): the new private
+// history remains only in sessionStorage and disappears when its window closes.
+qual('an existing conflict never prevents archival of another legacy session', async (page, bee) => {
+  await login(page)
+  await tap(page, '#bigbut', 7)
+  await settled(page)
+  const privateTally = count => ({ count, requestid: `legacy-${count}`, pin: null,
+    comment: `private ${count}`, day: null, undos: [{ count: count - 1 }], at: 'pushups' })
+  await page.evaluate(t => sessionStorage.setItem('tallybee', JSON.stringify(t)), privateTally(3))
+  await page.reload()
+  await see(page, '#status', /^Error: /)
+  const first = (await page.textContent('#status')).slice('Error: '.length)
+  await expectError(page, bee, new RegExp(RegExp.escape(first)))
+  for (let i = bee.errors.length - 1; i >= 0; i--)
+    if (/before initialization/.test(bee.errors[i])) bee.errors.splice(i, 1)
+  const next = await page.context().newPage()
+  await next.addInitScript(t => sessionStorage.setItem('tallybee', JSON.stringify(t)), privateTally(9))
+  await next.goto(alice('pushups'))
+  await see(next, '#status', /^Error: /)
+  const second = (await next.textContent('#status')).slice('Error: '.length)
+  await expectError(next, bee, new RegExp(RegExp.escape(second)))
+  for (let i = bee.errors.length - 1; i >= 0; i--)
+    if (/before initialization/.test(bee.errors[i])) bee.errors.splice(i, 1)
+  assert.ok(await next.evaluate(t => Object.keys(localStorage)
+    .filter(k => k.startsWith('tallybee-recovery '))
+    .some(k => localStorage.getItem(k) === JSON.stringify(t)), privateTally(9)),
+    'the third complete history survives outside its private session')
+})
+
+// Replicata: a running window observes a migration conflict between its shared
+// 7 and another window's private 3. An old-version sibling then writes 9 and
+// immediately overwrites it with 11, before the storage events are handled.
+// Expectata: the event's complete 9 is archived despite the existing conflict.
+// Resultata (checking the conflicting book before archiving the event): only
+// the overwritten legacy key remains, and that intermediate 9 is lost.
+qual('an existing conflict never prevents archival of an old-version storage event', async (page, bee) => {
+  await login(page)
+  await tap(page, '#bigbut', 7)
+  const watcher = await window2(page, alice('pushups'))
+  await see(watcher, '#bigbut', '7')
+  await settled(page)
+  const privateTally = count => ({ count, requestid: `legacy-${count}`, pin: null,
+    comment: `private ${count}`, day: null, undos: [{ count: count - 1 }], at: 'pushups' })
+  await page.evaluate(t => sessionStorage.setItem('tallybee', JSON.stringify(t)), privateTally(3))
+  await page.reload()
+  await see(page, '#status', /^Error: /)
+  await see(watcher, '#status', /^Error: /)
+  const expected = new Set(await Promise.all([page, watcher].map(async p =>
+    (await p.textContent('#status')).slice('Error: '.length))))
+  await page.evaluate(ts => {
+    for (const t of ts) localStorage.setItem('tallybee pushups', JSON.stringify(t))
+  }, [privateTally(9), privateTally(11)])
+  await frames(watcher)
+  await settled(watcher)
+  assert.ok(await till(watcher, () => watcher.evaluate(t => Object.keys(localStorage)
+    .filter(k => k.startsWith('tallybee-recovery '))
+    .some(k => {
+      const raw = localStorage.getItem(k), value = JSON.parse(raw)
+      return raw === JSON.stringify(t) ||
+        value.key === 'tallybee pushups' && value.value === JSON.stringify(t)
+    }), privateTally(9))),
+    'the overwritten event value is durable even while another conflict is unresolved')
+  for (let i = bee.errors.length - 1; i >= 0; i--)
+    if (expected.has(bee.errors[i]) || /before initialization/.test(bee.errors[i]))
+      bee.errors.splice(i, 1)
 })

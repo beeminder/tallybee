@@ -5,7 +5,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "node --test quals.js"
+    "test": "node --test journal-quals.js tally-quals.js quals.js"
   },
   "devDependencies": {
     "@fontsource-variable/roboto": "^5.3.0",
