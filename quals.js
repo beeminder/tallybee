@@ -285,9 +285,10 @@ const alice = slug => `${APP}alice/${slug}/`
 // SPEC CHANGE (menu, 2026-10-08): the dropdown is in the menu
 // SPEC CHANGE (paths, 2026-11-04): the goal's URL was ?goal=slug
 async function choose(page, slug) {
+  const username = JSON.parse(await stored(page)).user
   await menu(page)
   await page.selectOption('#goals', slug)
-  await page.waitForURL(alice(slug))
+  await page.waitForURL(`${APP}${username}/${slug}/`)
   await see(page, '#goals', /pushups/)
   assert.equal(await page.inputValue('#goals'), slug)
 }
@@ -1696,23 +1697,29 @@ qual('UNDO is grayed out while Beeminder takes the datapoint', async (page, bee)
 // and then while Beeminder takes the datapoint.
 // Resultata (in a mutant that never grayed them out while submitting): both
 // usable all along.
-qual('Clear and UNDO are grayed out while a Submit waits its turn', async (page, bee) => {
+// SPEC CHANGE (freshness, 2026-11-07): Submit requires current goal data;
+// local tally controls remain usable while it refreshes.
+qual('Clear and UNDO stay available during refresh and gray out when Submit starts', async (page, bee) => {
   await login(page)
   const [getshut, getopen] = gate()
   const [postshut, postopen] = gate()
   bee.reply = c => c.method === 'GET' ? getshut.then(() => null) : postshut
-  await comeback(page)
-  await calls(page, bee, LOAD + 2) // the goals and the user, held
-  await tap(page, '#bigbut', 3)
-  await tap(page, '#subbut')
-  for (const sel of ['#clearbut', '#undobut'])
-    assert.ok(await disabled(page, sel), `${sel}, waiting its turn`)
-  getopen()
-  await calls(page, bee, 2 * LOAD + 1) // the POST
-  for (const sel of ['#clearbut', '#undobut'])
-    assert.ok(await disabled(page, sel), `${sel}, sending`)
-  postopen(null)
-  await see(page, '#status', /^✓/)
+  try {
+    await comeback(page)
+    await calls(page, bee, LOAD + 2)
+    await tap(page, '#bigbut', 3)
+    assert.ok(await disabled(page, '#subbut'), 'stale goals cannot be submitted')
+    for (const sel of ['#clearbut', '#undobut'])
+      assert.ok(!await disabled(page, sel), `${sel}, while refreshing`)
+    getopen()
+    assert.ok(await till(page, async () => !await disabled(page, '#subbut')))
+    await tap(page, '#subbut')
+    await calls(page, bee, 2 * LOAD + 1)
+    for (const sel of ['#clearbut', '#undobut'])
+      assert.ok(await disabled(page, sel), `${sel}, sending`)
+    postopen(null)
+    await see(page, '#status', /^✓/)
+  } finally { getopen(); postopen(null) }
 })
 
 // Replicata: tap 3 and Submit, with Beeminder slow to answer; before it does,
@@ -1820,16 +1827,16 @@ qual('the goal dropdown is grayed out while Beeminder takes the datapoint', asyn
 // Expectata: 3 gets submitted, and the 2 stay counted.
 // Resultata (in a mutant that read the count when the Submit's turn came): 0,
 // the 2 taps made after Submit sent along with the 3.
+// SPEC CHANGE (freshness, 2026-11-07): capture is exercised before the async
+// Submit turn starts, in one task; no press of a stale disabled Submit.
 qual('Submit sends the count from when it was tapped, even while waiting its turn', async (page, bee) => {
   await login(page)
-  const [shut, open] = gate()
-  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
-  await comeback(page)
-  await calls(page, bee, LOAD + 2) // the goals and the user, held
   await tap(page, '#bigbut', 3)
-  await tap(page, '#subbut')
-  await tap(page, '#bigbut', 2)
-  open()
+  await page.evaluate(() => {
+    document.getElementById('subbut').click()
+    for (let i = 0; i < 2; i++) document.getElementById('bigbut').dispatchEvent(
+      new PointerEvent('pointerup', { isPrimary: true, button: 0 }))
+  })
   await see(page, '#bigbut', '2')
   assert.deepEqual(values(bee), ['3'])
 })
@@ -2049,20 +2056,29 @@ qual('a request that Beeminder never answers gives up with an error', async (pag
 // Beeminder.
 // Resultata (in a mutant whose loads of the goals waited for Beeminder
 // forever): "Submitting…" forever, with Submit grayed out.
-qual('a load that Beeminder never answers gives up, and a Submit waiting for it goes', async (page, bee) => {
+// SPEC CHANGE (connection notices, 2026-11-07): a transport failure while
+// refreshing is a neutral retrying notice; the Submit still succeeds.
+// SPEC CHANGE (freshness, 2026-11-07): the user approved refusing Submit
+// until the goal data is current, even after a refresh times out.
+qual('a timed-out refresh keeps Submit disabled until fresh data arrives', async (page, bee) => {
   await page.clock.install()
   await login(page)
   bee.reply = c => c.method === 'GET' ? new Promise(() => {}) : null
   await comeback(page)
-  await calls(page, bee, LOAD + 2) // the goals and the user, never answered
+  await calls(page, bee, LOAD + 2)
   await page.clock.runFor(15000)
   await tap(page, '#bigbut', 3)
-  await tap(page, '#subbut')
-  // (Just past the load's PATIENCE, not much more, which would run out the
-  // Submit's own, on this clock, before Beeminder's answer got to the page)
+  assert.ok(await disabled(page, '#subbut'))
+  await page.$eval('#subbut', b => b.click())
   await page.clock.runFor(16000)
-  await see(page, '#status', /✓/)
-  await expectError(page, bee, /./)
+  await connectionNotice(page)
+  assert.ok(await disabled(page, '#subbut'))
+  assert.equal(posts(bee).length, 0)
+  bee.reply = () => null
+  await page.evaluate(() => dispatchEvent(new Event('online')))
+  assert.ok(await till(page, async () => !await disabled(page, '#subbut')))
+  await tap(page, '#subbut')
+  await see(page, '#status', /^✓/)
   assert.deepEqual(values(bee), ['3'])
 })
 
@@ -3006,19 +3022,26 @@ qual("a slow goals load can't undo a newer one", async (page, bee) => {
 // Expectata: 133 gets submitted.
 // Resultata (in a mutant that took the goal as it was when Submit was
 // pressed): 123, built on the 120 from before the refresh.
-qual('a submission waiting on a goals refresh uses the refreshed goal', async (page, bee) => {
+// SPEC CHANGE (freshness, 2026-11-07): Submit is disabled during the
+// refresh; after it succeeds, the submitted reading still uses that refresh.
+qual('Submit waits for a current odometer reading before it can be pressed', async (page, bee) => {
   await login(page)
   await choose(page, 'pages')
   const [shut, open] = gate()
   bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
   bee.goals[1].last_datapoint = datapoint(130)
-  await comeback(page)
-  await calls(page, bee, 2 * LOAD + 2)
-  await tap(page, '#bigbut', 3)
-  await tap(page, '#subbut')
-  open()
-  await see(page, '#status', /^✓/)
-  assert.deepEqual(values(bee), ['133'])
+  try {
+    await comeback(page)
+    await calls(page, bee, 2 * LOAD + 2)
+    await tap(page, '#bigbut', 3)
+    assert.ok(await disabled(page, '#subbut'))
+    open()
+    await see(page, '#num', '133')
+    assert.ok(await till(page, async () => !await disabled(page, '#subbut')))
+    await tap(page, '#subbut')
+    await see(page, '#status', /^✓/)
+    assert.deepEqual(values(bee), ['133'])
+  } finally { open() }
 })
 
 // ---------------------------------------------------------------- the day
@@ -3232,17 +3255,16 @@ for (const [now, via] of [['2026-10-02T20:45:08Z', 'via tallybee at 16:45:08 EDT
 // when pressed, even while waiting its turn").
 // Resultata (in a mutant that took the time when the Submit's turn came):
 // 16:45:38.
+// SPEC CHANGE (freshness, 2026-11-07): the clock advances after the enabled
+// press but before its asynchronous turn, without a stale Submit press.
 qual('the time in the comment is when Submit was pressed, even if it waits its turn', async (page, bee) => {
   await page.clock.setFixedTime(new Date('2026-10-02T20:45:08Z'))
   await login(page)
-  const [shut, open] = gate()
-  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
-  await comeback(page)
-  await calls(page, bee, LOAD + 2)
   await tap(page, '#bigbut', 3)
-  await tap(page, '#subbut')
-  await page.clock.setFixedTime(new Date('2026-10-02T20:45:38Z'))
-  open()
+  await page.evaluate(() => {
+    document.getElementById('subbut').click()
+    Date.now = () => Date.parse('2026-10-02T20:45:38Z')
+  })
   await see(page, '#bigbut', '0')
   assert.deepEqual(posts(bee).map(p => p.params.comment),
                    ['via tallybee at 16:45:08 EDT'])
@@ -3674,22 +3696,31 @@ qual('the comment field is grayed out while Beeminder takes the datapoint', asyn
 // the comment (decided with the person working on this, AGENTS.md N7): just "first"
 // SPEC CHANGE (shared goals, 2026-11-07): the other window changes the shared
 // field, but the queued Submit sends the comment captured when pressed.
+// SPEC CHANGE (freshness, 2026-11-07): the same-origin sibling edits in the
+// press task before the Submit turn begins; neither window bypasses disabled UI.
 qual('Submit sends the comment as it was when pressed, even while waiting its turn', async (page, bee) => {
   await login(page)
+  const popup = page.waitForEvent('popup')
+  await page.evaluate(url => { window.qualCommentWindow = window.open(url) }, APP)
+  const w = await popup
+  await see(w, '#goals', /pushups/)
+  assert.ok(await till(w, async () => !await disabled(w, '#subbut')))
+  await page.bringToFront()
+  assert.ok(await till(page, async () => !await disabled(page, '#subbut')))
   await remark(page, 'first')
+  await tap(page, '#bigbut', 3)
   const [shut, open] = gate()
-  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
+  bee.reply = c => c.method === 'POST' ? shut : null
   try {
-    await comeback(page)
-    await calls(page, bee, LOAD + 2)
-    await tap(page, '#bigbut', 3)
-    await tap(page, '#subbut')
-    const w = await window2(page, APP)
-    await w.bringToFront()
-    await remark(w, 'second')
-    await page.bringToFront()
+    await page.evaluate(() => {
+      document.getElementById('subbut').click()
+      const c = window.qualCommentWindow.document.getElementById('comment')
+      c.focus()
+      c.value = 'second'
+      c.dispatchEvent(new Event('input', { bubbles: true }))
+    })
     await see(page, '#comment', 'second')
-    open()
+    open(null)
     await see(page, '#bigbut', '0')
     assert.equal(posts(bee)[0].params.comment, 'first')
   } finally { open(null) }
@@ -4048,6 +4079,8 @@ qual('goals get refreshed when you come back to the page', async (page, bee) => 
 // connection is back, the goals as they are now.
 // Resultata (before the tab kept its goals): no goals at all till then; and
 // before that, none till you left TallyBee and came back to it.
+// SPEC CHANGE (connection notices, 2026-11-07): unavailable transport gets a
+// neutral notice while the cached goals remain visibly stale.
 qual('the goals load as soon as the connection comes back', async (page, bee) => {
   await login(page)
   // (The routes serve TallyBee itself even offline, as the service worker
@@ -4056,8 +4089,7 @@ qual('the goals load as soon as the connection comes back', async (page, bee) =>
   bee.reply = () => 'abort'
   bee.goals[0].safesum = 'safe for 2 days'
   await page.reload()
-  await see(page, '#status', /Error/)
-  await expectError(page, bee, /fetch/i)
+  await connectionNotice(page)
   assert.equal(await page.textContent('#safesum'), '+2 pushups due by 12am')
   bee.reply = () => null
   await page.context().setOffline(false)
@@ -4730,6 +4762,8 @@ test('the service worker keeps no URL with an access token in it', async () => {
 // one of TallyBee's own files): the answer came through the service worker,
 // which kept a copy of it, and, with no connection, answered with that, as if
 // it were new.
+// SPEC CHANGE (connection notices, 2026-11-07): an unavailable API response
+// is reported neutrally, without treating a cached goal as fresh.
 test("the service worker leaves Beeminder's answers alone", async () => {
   const bee = newbee()
   const context = await browser.newContext()
@@ -4750,7 +4784,7 @@ test("the service worker leaves Beeminder's answers alone", async () => {
       bee.reply = () => 'abort'
       await context.setOffline(true)
       await page.reload()
-      await see(page, '#status', /^Error: .*fetch/i)
+      await connectionNotice(page)
     })
   } finally { await context.close() }
 })
@@ -5057,7 +5091,8 @@ qual('no "Send" or "to" in the footer, folded or not', async page => {
 // SPEC CHANGE (clear, 2026-10-12): this was "...even on a 320px phone": with
 // Clear in the bar, a 320px phone's bar takes two rows (approved 2026-10-12;
 // see "unfolded, the footer goes from the info line down to the bar")
-qual('folded, the footer is one row, even on a 360px phone', async page => {
+qual('folded, the footer is one row, even on a 360px phone', async (page, bee) => {
+  bee.user.username = 'christophermoravec'
   await login(page, 'christophermoravec')
   await tap(page, '#bigbut', 12)
   await tap(page, '#foldbut')
@@ -5158,6 +5193,7 @@ for (const [width, height, opts, long] of [[320, 568], [390, 844], [844, 390], [
   qual(`folding and unfolding moves nothing in the bar (${width}x${height})`, async (page, bee) => {
     if (long) bee.goals.push({ slug: 'reading-for-the-book-club', kyoom: true,
       curval: 0, deadline: 0, last_datapoint: null, safesum: 'safe for 9 days', queued: false })
+    bee.user.username = long ? 'christophermoravec' : 'alice'
     await login(page, long ? 'christophermoravec' : 'alice')
     await taps(page, 3)
     const where = () => Promise.all(BAR.map(s => box(page, s)))
@@ -5478,6 +5514,7 @@ qual('folding holds still for people who ask their device for less motion', asyn
 // Resultata (in prototype A): the bar went below the screen with the bottom
 // of the footer, so the footer couldn't be folded again.
 qual('with text at 200%, the fold button stays on the screen, even under a long error', async (page, bee) => {
+  bee.user.username = 'christophermoravec'
   bee.goals.push({ slug: 'reading-for-the-book-club', kyoom: true, curval: 0,
                    deadline: 0, last_datapoint: null, safesum: 'safe for 9 days', queued: false })
   await login(page, 'christophermoravec')
@@ -5522,6 +5559,7 @@ qual('with text at 200%, the fold button stays on the screen, even under a long 
 // button was 0px tall, with nowhere to tap but the footer. (And in a draft of
 // this build, under the error, the drawer was a 34px sliver of a 44px row.)
 qual('unfolded, with text at 200%, the big button keeps room to tap', async (page, bee) => {
+  bee.user.username = 'christophermoravec'
   bee.goals.push({ slug: 'reading-for-the-book-club', kyoom: true, curval: 0,
                    deadline: 0, last_datapoint: null, safesum: 'safe for 9 days', queued: false })
   await login(page, 'christophermoravec')
@@ -5555,6 +5593,7 @@ qual('unfolded, with text at 200%, the big button keeps room to tap', async (pag
 // 200x433, and 3.3px at 180x390, a red sliver.
 for (const [width, height] of [[200, 433], [180, 390]])
   qual(`with text at 200%, an error shows its first line whole (${width}x${height})`, async (page, bee) => {
+    bee.user.username = 'christophermoravec'
     bee.goals.push({ slug: 'reading-for-the-book-club', kyoom: true, curval: 0,
                      deadline: 0, last_datapoint: null, safesum: 'safe for 9 days', queued: false })
     await login(page, 'christophermoravec')
@@ -5588,7 +5627,8 @@ for (const [width, height] of [[200, 433], [180, 390]])
 // drawer scroll only where text is made huge.
 // Resultata (with the drawer capped at a quarter of the screen instead, as
 // first built): at 320x568, logged in, the drawer scrolled.
-qual('at the usual text size, the drawer shows whole', async page => {
+qual('at the usual text size, the drawer shows whole', async (page, bee) => {
+  bee.user.username = 'christophermoravec'
   const whole = async what => {
     for (const [width, height] of [[390, 844], [412, 915], [360, 780], [320, 568],
                                    [280, 653], [844, 390], [640, 360], [568, 320],
@@ -5652,6 +5692,7 @@ qual("the bar stays above the phone's own navigation bar", async page => {
 // unfolded, under the error: a page 356px tall, Submit and the fold button
 // below the screen.)
 qual('the page itself never scrolls, even under a long error', async (page, bee) => {
+  bee.user.username = 'christophermoravec'
   bee.goals.push({ slug: 'reading-for-the-book-club', kyoom: true, curval: 0,
                    deadline: 0, last_datapoint: null, safesum: 'safe for 9 days', queued: false })
   await login(page, 'christophermoravec')
@@ -5868,7 +5909,8 @@ qual('the help holds still for people who ask their device for less motion', asy
 // of another, or of the version tag.
 // Resultata (in a mutant without the footer's room at the bottom for the
 // version tag): the fold button on top of the version tag.
-qual('the controls fit a narrow phone without overlapping', async page => {
+qual('the controls fit a narrow phone without overlapping', async (page, bee) => {
+  bee.user.username = 'christophermoravec'
   await login(page, 'christophermoravec')
   await tap(page, '#bigbut')
   await fits(page)
@@ -5890,6 +5932,7 @@ qual('the controls fit a narrow phone without overlapping', async page => {
 // drawer, so each of the drawer's controls, rather than each of its rows, gets
 // checked once scrolled to.
 qual('with text at 200% on a phone, the controls still fit', async (page, bee) => {
+  bee.user.username = 'christophermoravec'
   bee.goals.push({ slug: 'reading-for-the-book-club', kyoom: true, curval: 0,
                    deadline: 0, last_datapoint: null, safesum: 'safe for 9 days', queued: false })
   await login(page, 'christophermoravec')
@@ -6411,6 +6454,7 @@ qual('the ring that shows where the keyboard is shows whole, around every contro
 // now just the info line and the form row, no longer scrolls; and 8 controls,
 // the menu button first
 qual('the ring that shows where the keyboard is shows whole, even where the drawer scrolls', async (page, bee) => {
+  bee.user.username = 'christophermoravec'
   bee.goals.push({ slug: 'reading-for-the-book-club', kyoom: true, curval: 0,
                    deadline: 0, last_datapoint: null, safesum: 'safe for 9 days', queued: false })
   await login(page, 'christophermoravec')
@@ -7375,7 +7419,7 @@ qual('an error while TallyBee starts shows, rather than the infinibee', async (p
 // Expectata: an error, in plain view, in words, and no infinibee.
 // Resultata (in a mutant with nothing on the script's onerror): the infinibee
 // flying forever.
-for (const file of ['script.js', 'beeminder.js', 'journal.js', 'tally.js'])
+for (const file of ['script.js', 'beeminder.js', 'journal.js', 'tally.js', 'goals-cache.js'])
   qual(`if ${file} can't load, TallyBee says so, rather than showing the infinibee`, async page => {
     await page.context().route(APP + file, r => r.fulfill({ status: 404, body: 'Not found' }))
     await page.goto(APP)
@@ -8098,4 +8142,776 @@ qual('an existing conflict never prevents archival of an old-version storage eve
   for (let i = bee.errors.length - 1; i >= 0; i--)
     if (expected.has(bee.errors[i]) || /before initialization/.test(bee.errors[i]))
       bee.errors.splice(i, 1)
+})
+
+// ----------------------------------------- connection notices (2026-11-07)
+
+// A refresh with no earlier operation message reports transport trouble
+// neutrally and explicitly marks its retained safesum as out of date.
+async function connectionNotice(page) {
+  assert.ok(await till(page, async () =>
+    await page.getAttribute('#status', 'data-refresh') === 'waiting'),
+    'refresh reached its waiting state')
+  await see(page, '#status', /./)
+  const text = await page.textContent('#status')
+  assert.equal(await page.getAttribute('#status', 'data-kind'), 'busy')
+  assert.ok(!text.startsWith('Error:'), text)
+  assert.equal(await page.getAttribute('#safesum', 'aria-busy'), 'true')
+  return text
+}
+
+// Replicata: return to a goal with a complete pending tally while its refresh
+// fails at the fetch boundary, either immediately or with a timeout.
+// Expectata: a neutral connection notice; tally, comment, day, requestid and
+// UNDO all remain intact, with the retained safesum visibly stale.
+// Resultata (before): the raw transport error was presented as an app error.
+for (const failure of ['network', 'timeout'])
+  qual(`a returning refresh ${failure} preserves the tally and reports a neutral notice`, async (page, bee) => {
+    await page.clock.setFixedTime(NOON)
+    await login(page)
+    await tap(page, '#bigbut', 7)
+    await remark(page, 'unfinished set')
+    await page.selectOption('#day', '20261001')
+    const saved = await tallied(page)
+    if (failure === 'network') bee.reply = c => c.method === 'GET' ? 'abort' : null
+    else await page.evaluate(api => {
+      const fetch = window.fetch
+      window.fetch = (input, init) => String(input).startsWith(api) &&
+        (init?.method ?? 'GET') === 'GET'
+        ? Promise.reject(new DOMException('signal timed out', 'TimeoutError'))
+        : fetch(input, init)
+    }, API)
+    await comeback(page)
+    await connectionNotice(page)
+    assert.deepEqual(await tallied(page), saved)
+    await see(page, '#bigbut', '7')
+    await see(page, '#comment', 'unfinished set')
+    await tap(page, '#undobut')
+    assert.equal(await page.inputValue('#day'), '20261002')
+    await see(page, '#bigbut', '7')
+  }, TOKYO)
+
+// Replicata: count 7, close the window, then launch with no API connection
+// and no session-cached goals.
+// Expectata: the durable tally appears and remains undoable; the unavailable
+// refresh is a neutral notice and Submit waits for goals to load.
+// Resultata (before): launch showed an alarming raw Failed to fetch error.
+qual('a cold launch without an API connection preserves its tally without a raw error', async (page, bee) => {
+  await login(page)
+  await tap(page, '#bigbut', 7)
+  const saved = await tallied(page)
+  const context = page.context()
+  await page.close()
+  bee.reply = c => c.method === 'GET' ? 'abort' : null
+  const again = await context.newPage()
+  await again.goto(alice('pushups'))
+  await connectionNotice(again)
+  await see(again, '#bigbut', '7')
+  assert.deepEqual(await tallied(again), saved)
+  assert.ok(await disabled(again, '#subbut'))
+  await tap(again, '#undobut')
+  await see(again, '#bigbut', '6')
+})
+
+// Replicata: a refresh loses its connection; the connection returns without
+// the browser dispatching online or visibilitychange.
+// Expectata: one retry after 30 seconds; a complete successful refresh clears
+// its own notice and stale marker, and schedules no further retry.
+// Resultata (before): the failed refresh was never retried automatically.
+qual('a failed refresh retries after 30 seconds and clears only its connection notice', async (page, bee) => {
+  await page.clock.install()
+  await login(page)
+  await tap(page, '#bigbut', 7)
+  // Freeze elapsed time before the failure starts its exact 30-second timer.
+  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now()) + 1000))
+  bee.reply = c => c.method === 'GET' ? 'abort' : null
+  await comeback(page)
+  await connectionNotice(page)
+  await settled(page)
+  const n = bee.calls.length
+  await page.clock.runFor(29999)
+  assert.equal(bee.calls.length, n, 'no retry before 30 seconds')
+  bee.reply = () => null
+  bee.goals[0].safesum = 'safe for 9 days'
+  await page.clock.runFor(1)
+  await see(page, '#safesum', 'safe for 9 days')
+  await see(page, '#status', '')
+  assert.equal(await page.getAttribute('#safesum', 'aria-busy'), 'false')
+  assert.equal(await count(page), 7)
+  await settled(page)
+  const done = bee.calls.length
+  await page.clock.runFor(60000)
+  await settled(page)
+  assert.equal(bee.calls.length, done, 'no retry after successful refresh')
+})
+
+// Replicata: Submit succeeds, then its follow-up goals refresh loses the
+// connection. Later the refresh succeeds.
+// Expectata: the exact success message remains, with a neutral notice appended
+// during the failure; recovery removes only that appended notice.
+// Resultata (before): Failed to fetch replaced the confirmed success message.
+qual('a failed follow-up refresh cannot replace a confirmed Submit success', async (page, bee) => {
+  await page.clock.install()
+  await login(page)
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  await see(page, '#status', /^✓/)
+  const success = await page.textContent('#status')
+  bee.reply = c => c.method === 'GET' ? 'abort' : null
+  await page.clock.runFor(2000)
+  await see(page, '#status', new RegExp('^' + RegExp.escape(success + '\n') + '.+'))
+  assert.equal(await page.getAttribute('#status', 'data-kind'), 'ok')
+  assert.equal(await page.getAttribute('#safesum', 'aria-busy'), 'true')
+  assert.equal(await count(page), 0)
+  assert.equal(posts(bee).length, 1)
+  bee.reply = () => null
+  await comeback(page)
+  await see(page, '#status', success)
+  assert.equal(await page.getAttribute('#safesum', 'aria-busy'), 'false')
+})
+
+// Replicata: a Submit gets an explicit server error; a later refresh loses
+// its connection and then recovers.
+// Expectata: that Submit error remains verbatim throughout, with only the
+// connection notice added and removed; pending datapoint identity is kept.
+// Resultata (before): the refresh error replaced the Submit error.
+qual('a connection notice cannot erase an earlier Submit error', async (page, bee) => {
+  await login(page)
+  await tap(page, '#bigbut', 3)
+  bee.reply = c => c.method === 'POST' ? [500, { errors: 'Qual: submit refused' }] : null
+  await tap(page, '#subbut')
+  await see(page, '#status', /500.*Qual: submit refused/)
+  await expectError(page, bee, /Qual: submit refused/)
+  const failed = await page.textContent('#status'), saved = await tallied(page)
+  bee.reply = c => c.method === 'GET' ? 'abort' : null
+  await comeback(page)
+  await see(page, '#status', new RegExp('^' + RegExp.escape(failed + '\n') + '.+'))
+  assert.equal(await page.getAttribute('#status', 'data-kind'), 'err')
+  assert.deepEqual(await tallied(page), saved)
+  bee.reply = () => null
+  await comeback(page)
+  await see(page, '#status', failed)
+  assert.deepEqual(await tallied(page), saved)
+  assert.equal(posts(bee).length, 1)
+})
+
+// Replicata: repeated manual returns fail, then each automatic refresh fails.
+// Expectata: one automatic refresh every 30 seconds, not one retry loop for
+// every return; all failures remain neutral and no POST occurs.
+// Resultata (before): no automatic recovery after the first failed refresh.
+qual('repeated connection failures retain only one automatic retry timer', async (page, bee) => {
+  await page.clock.install()
+  await login(page)
+  bee.reply = c => c.method === 'GET' ? 'abort' : null
+  await comeback(page)
+  await connectionNotice(page)
+  await comeback(page)
+  await comeback(page)
+  await settled(page)
+  const n = bee.calls.length
+  for (let i = 1; i <= 3; i++) {
+    await page.clock.runFor(30000)
+    await calls(page, bee, n + 2 * i)
+    await settled(page)
+    await connectionNotice(page)
+  }
+  assert.equal(posts(bee).length, 0)
+})
+
+// Replicata: a refresh fails, then online arrives 15 seconds into its retry
+// delay and the refresh succeeds.
+// Expectata: the online event refreshes immediately and cancels the old timer.
+// Resultata (a second independent retry timer): an unnecessary later refresh.
+qual('online refreshes immediately and cancels the pending connection retry', async (page, bee) => {
+  await page.clock.install()
+  await login(page)
+  bee.reply = c => c.method === 'GET' ? 'abort' : null
+  await comeback(page)
+  await connectionNotice(page)
+  await page.clock.runFor(15000)
+  bee.reply = () => null
+  bee.goals[0].safesum = 'safe for 8 days'
+  await page.evaluate(() => dispatchEvent(new Event('online')))
+  await see(page, '#safesum', 'safe for 8 days')
+  await see(page, '#status', '')
+  await settled(page)
+  const n = bee.calls.length
+  await page.clock.runFor(60000)
+  await settled(page)
+  assert.equal(bee.calls.length, n)
+})
+
+// Replicata: following a successful Submit, its refresh loses the connection;
+// the automatic retry then gets HTTP 500.
+// Expectata: the HTTP error stays explicit and automatic connection retrying
+// stops, even though the old goal still says Beeminder is updating it.
+// Resultata (retrying every failure): server errors become a silent retry loop.
+qual('an HTTP error stops connection retries and remains an explicit error', async (page, bee) => {
+  await page.clock.install()
+  await login(page)
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  await see(page, '#status', /^✓/)
+  bee.reply = c => c.method === 'GET' ? 'abort' : null
+  await page.clock.runFor(2000)
+  await see(page, '#status', /\n.+/)
+  bee.reply = c => c.method === 'GET' ? [500, { errors: 'Qual: refresh refused' }] : null
+  await page.clock.runFor(30000)
+  await see(page, '#status', /^Error: 500.*Qual: refresh refused/)
+  await expectError(page, bee, /Qual: refresh refused/)
+  await settled(page)
+  const n = bee.calls.length
+  await page.clock.runFor(120000)
+  await settled(page)
+  assert.equal(bee.calls.length, n, 'HTTP errors do not schedule transport retries')
+  assert.equal(posts(bee).length, 1)
+})
+
+// Replicata: a connection failure is followed by a refresh that rejects the
+// saved token with HTTP 401.
+// Expectata: the usual explicit login error and logged-out controls; no retry
+// attempts using a token Beeminder rejected.
+// Resultata (catching every refresh failure as connection trouble): hidden 401.
+qual('a rejected login during connection recovery remains explicit and stops retrying', async (page, bee) => {
+  await page.clock.install()
+  await login(page)
+  bee.reply = c => c.method === 'GET' ? 'abort' : null
+  await comeback(page)
+  await connectionNotice(page)
+  bee.reply = () => null
+  bee.tokens = ['different-token']
+  await page.clock.runFor(30000)
+  await see(page, '#status', new RegExp('^Error: ' + RegExp.escape(REAUTH)))
+  await expectError(page, bee, new RegExp(RegExp.escape(REAUTH)))
+  assert.ok(await disabled(page, '#subbut'))
+  assert.ok(await page.isVisible('#loginbut'))
+  await settled(page)
+  const n = bee.calls.length
+  await page.clock.runFor(120000)
+  assert.equal(bee.calls.length, n)
+})
+
+// Replicata: a refresh receives HTTP 200 containing invalid JSON.
+// Expectata: the parse error remains loud, with no connection-retry loop.
+// Resultata (catching all response-reading failures as transport): malformed
+// server data is hidden as an ordinary connection failure.
+qual('malformed refresh JSON is an explicit error rather than a connection notice', async (page, bee) => {
+  await page.clock.install()
+  await login(page)
+  let intercepted = 0
+  await page.context().route(url => url.href.startsWith(API + 'users/me/goals.json?'), r => { intercepted++; return r.fulfill({
+    status: 200, contentType: 'application/json',
+    headers: { 'access-control-allow-origin': '*' }, body: '{',
+  }) })
+  await comeback(page)
+  assert.ok(await till(page, () => intercepted > 0), JSON.stringify(bee.calls))
+  await settled(page)
+  await see(page, '#status', /^Error: /)
+  const message = (await page.textContent('#status')).slice('Error: '.length)
+  await expectError(page, bee, new RegExp(RegExp.escape(message)))
+  assert.equal(await page.getAttribute('#status', 'data-kind'), 'err')
+  await settled(page)
+  const n = bee.calls.length
+  await page.clock.runFor(60000)
+  assert.equal(bee.calls.length, n)
+})
+
+// Replicata: Beeminder returns a syntactically valid goal with kyoom set to a
+// string instead of a boolean.
+// Expectata: schema validation still fails loudly; data is never silently
+// accepted or treated as unavailable transport.
+// Resultata (a blanket refresh catch): the schema error is hidden.
+qual('malformed goal fields remain explicit errors during refresh', async (page, bee) => {
+  await login(page)
+  bee.goals[0].kyoom = 'yes'
+  await comeback(page)
+  await see(page, '#status', /^Error: .*kyoom/)
+  await expectError(page, bee, /kyoom/)
+  assert.equal(await page.getAttribute('#status', 'data-kind'), 'err')
+})
+
+// Replicata: a programming bug throws TypeError while the refreshed goals
+// are being put into their dropdown, after valid network responses arrived.
+// Expectata: the programming error remains loud, not a connection notice.
+// Resultata (catching TypeError around the entire refresh): the bug is hidden.
+qual('a programmer TypeError after refresh IO is never treated as connection trouble', async (page, bee) => {
+  await login(page)
+  await page.$eval('#goals', e => {
+    e.replaceChildren = () => { throw new TypeError('Qual: dropdown bug') }
+  })
+  await comeback(page)
+  await see(page, '#status', /^Error: Qual: dropdown bug$/)
+  await expectError(page, bee, /^Qual: dropdown bug$/)
+  assert.equal(await page.getAttribute('#status', 'data-kind'), 'err')
+})
+
+// Replicata: a Submit loses its reply, then two minutes pass.
+// Expectata: the error stays explicit, the complete pending datapoint remains,
+// and no POST is retried without another Submit press.
+// Resultata (applying automatic recovery to POSTs): an unrequested resend.
+qual('a failed POST is never automatically resent by connection recovery', async (page, bee) => {
+  await page.clock.install()
+  await login(page)
+  await tap(page, '#bigbut', 3)
+  bee.reply = c => c.method === 'POST' ? 'abort' : null
+  await tap(page, '#subbut')
+  await see(page, '#status', /^Error: .*fetch/i)
+  await expectError(page, bee, /fetch/i)
+  const failed = await page.textContent('#status'), saved = await tallied(page)
+  await page.clock.runFor(120000)
+  await settled(page)
+  assert.equal(posts(bee).length, 1)
+  assert.deepEqual(await tallied(page), saved)
+  await see(page, '#status', failed)
+})
+
+// Replicata: dismiss the neutral connection notice while still disconnected;
+// then let the scheduled retry run after the connection returns.
+// Expectata: dismissal clears the text only; stale styling and recovery stay
+// active until a complete successful refresh, and counting remains intact.
+// Resultata (using the visible notice itself as the retry/staleness state):
+// dismissing it incorrectly marks old data fresh or prevents recovery.
+qual('dismissing a connection notice keeps stale data marked and recovery scheduled', async (page, bee) => {
+  await page.clock.install()
+  await login(page)
+  await tap(page, '#bigbut', 7)
+  bee.reply = c => c.method === 'GET' ? 'abort' : null
+  await comeback(page)
+  await connectionNotice(page)
+  await tap(page, '#dismiss')
+  await see(page, '#status', '')
+  assert.equal(await page.getAttribute('#safesum', 'aria-busy'), 'true')
+  bee.reply = () => null
+  bee.goals[0].safesum = 'safe for 7 days'
+  await page.clock.runFor(30000)
+  await see(page, '#safesum', 'safe for 7 days')
+  await see(page, '#status', '')
+  assert.equal(await page.getAttribute('#safesum', 'aria-busy'), 'false')
+  assert.equal(await count(page), 7)
+})
+
+// -------------------------------------- cached goal details (2026-11-07)
+
+// The displayed goal details, excluding operation/connection messages and
+// freshness styling, which can change independently of the retained data.
+const goalView = page => page.evaluate(() => ({
+  name: document.getElementById('goalname').textContent,
+  safesum: document.getElementById('safesum').textContent,
+  last: document.getElementById('lastdp').textContent,
+  number: document.getElementById('num').value,
+  count: document.getElementById('count').textContent,
+  placeholder: document.getElementById('comment').placeholder,
+  selected: document.getElementById('goals').value,
+  options: [...document.getElementById('goals').options].map(o => o.value),
+  link: document.getElementById('goallink').getAttribute('href'),
+}))
+async function staleGoal(page, state = 'loading') {
+  assert.ok(await till(page, async () =>
+    await page.getAttribute('#status', 'data-refresh') === state), state)
+  await see(page, '#status', /./)
+  for (const id of ['goalname', 'safesum', 'lastdp', 'goals', 'goallink']) {
+    assert.equal(await page.getAttribute('#' + id, 'aria-busy'), 'true', id)
+    assert.ok(await opacity(page, '#' + id) < 0.5, id + ' is visibly stale')
+  }
+  assert.ok(await disabled(page, '#subbut'), 'only current goal data can be submitted')
+}
+
+// Replicata: cache an odometer goal's last-added datapoint, count 7, keep a
+// sibling open, close the first window and reopen it while all GETs wait.
+// Expectata: every saved detail and the correct reading appear immediately,
+// with a loading notice, stale styling and Submit disabled.
+// Resultata (session-only goal cache): a new window briefly shows a bare7 and
+// blank goal details until Beeminder answers.
+qual('cached goal details appear on reopening beside a sibling before the network answers', async (page, bee) => {
+  bee.added.pages = datapoint(125, { comment: 'cached reading' })
+  await login(page)
+  await choose(page, 'pages')
+  await tap(page, '#bigbut', 7)
+  const expected = await goalView(page)
+  const sibling = await window2(page, alice('pages'))
+  await see(sibling, '#num', '132')
+  await settled(sibling)
+  const context = page.context()
+  await page.close()
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
+  try {
+    const again = await context.newPage()
+    await again.goto(alice('pages'))
+    await see(again, '#num', '132')
+    assert.deepEqual(await goalView(again), expected)
+    await staleGoal(again)
+  } finally { open() }
+})
+
+// Replicata: a fully displayed goal starts a refresh that is slow to answer.
+// Expectata: no field goes blank or changes value merely because the refresh
+// began; a loading notice and gray goal details state what is happening.
+// Resultata (before): no indication that a background load was in progress.
+qual('refreshing never blanks displayed goal details and visibly marks them stale', async (page, bee) => {
+  await login(page)
+  await tap(page, '#bigbut', 7)
+  const expected = await goalView(page)
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
+  try {
+    await comeback(page)
+    await staleGoal(page)
+    assert.deepEqual(await goalView(page), expected)
+    assert.ok(!await page.isVisible('#infinibee'), 'a refresh does not block counting with a spinner')
+  } finally { open() }
+})
+
+// Replicata: only pushups has been selected, but the loaded goal catalogue
+// also knows pages. Close all windows, then open pages while GETs wait.
+// Expectata: pages' known name, safesum, last datapoint and comment placeholder
+// appear immediately from that account's catalogue, marked stale.
+// Resultata (session-only cache): the newly opened goal's fields are blank.
+qual('a cold named goal uses its account catalogue before its first selected-goal refresh', async (page, bee) => {
+  await login(page)
+  const context = page.context()
+  await page.close()
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
+  try {
+    const again = await context.newPage()
+    await again.goto(alice('pages'))
+    await see(again, '#goalname', 'alice/pages')
+    await see(again, '#safesum', 'safe for 3 days')
+    await see(again, '#lastdp', '29 120')
+    await see(again, '#num', '120')
+    assert.equal(await again.getAttribute('#comment', 'placeholder'), 'Comment (optional)')
+    assert.equal(await again.inputValue('#goals'), 'pages')
+    await staleGoal(again)
+  } finally { open() }
+})
+
+// Replicata: pages' last-added value is125 even though the goals catalogue
+// calls an older/edited datapoint120 its last. Visit pages, then refresh
+// pushups' catalogue, close everything and reopen pages with slow GETs.
+// Expectata: pages' validated selected-goal snapshot still supplies125.
+// Resultata (one shared catalogue replacing every goal snapshot):120 returns.
+qual('another goal refresh cannot overwrite a cached selected-goal last-added reading', async (page, bee) => {
+  bee.added.pages = datapoint(125, { comment: 'last added' })
+  await login(page)
+  await choose(page, 'pages')
+  await see(page, '#num', '125')
+  const expected = await goalView(page)
+  await choose(page, 'pushups')
+  await settled(page)
+  const context = page.context()
+  await page.close()
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
+  try {
+    const again = await context.newPage()
+    await again.goto(alice('pages'))
+    await see(again, '#num', '125')
+    assert.deepEqual(await goalView(again), expected)
+    await staleGoal(again)
+  } finally { open() }
+})
+
+// Replicata: Alice has cached pages with an identifiable safesum and comment.
+// Switch the stored login to Bob and open Bob's pages while his GETs wait.
+// Expectata: Bob's URL supplies his identity; none of Alice's cached details
+// or catalogue leaks into his loading display.
+// Resultata (a cache keyed only by goal slug): Alice's data shows for Bob.
+qual('cached goal details are isolated by account', async (page, bee) => {
+  bee.goals[1].safesum = 'Alice cache marker'
+  bee.added.pages = datapoint(125, { comment: 'Alice cached comment' })
+  await login(page)
+  await choose(page, 'pages')
+  await see(page, '#num', '125')
+  await page.evaluate(token => localStorage.setItem('beeminder-token',
+    JSON.stringify({ token, user: 'bob' })), TOKEN)
+  const context = page.context()
+  await page.close()
+  const [shut, open] = gate()
+  bee.user = { ...ALICE, username: 'bob' }
+  bee.goals[1].safesum = 'Bob current marker'
+  bee.added.pages = datapoint(42, { comment: 'Bob current comment' })
+  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
+  try {
+    const again = await context.newPage()
+    await again.goto(APP + 'bob/pages/')
+    await see(again, '#goalname', 'bob/pages')
+    await staleGoal(again)
+    const view = await goalView(again)
+    assert.ok(!JSON.stringify(view).includes('Alice'), JSON.stringify(view))
+    assert.ok(!view.options.includes('pushups'), 'no other account catalogue before Bob loads')
+    assert.notEqual(view.number, '125')
+    open()
+    await see(again, '#safesum', 'Bob current marker')
+    await see(again, '#num', '42')
+    assert.ok(await till(again, async () => !await disabled(again, '#subbut')))
+  } finally { open() }
+})
+
+// Replicata: close an odometer goal with a complete cache and reopen offline.
+// Expectata: the entire saved display remains, with a neutral connection
+// notice and stale styling; the pending reading is not reduced to a bare tally.
+// Resultata (session-only cache): no goal details and a misleading bare count.
+qual('a failed cold refresh retains all durable cached goal details', async (page, bee) => {
+  bee.added.pages = datapoint(125, { comment: 'offline reading' })
+  await login(page)
+  await choose(page, 'pages')
+  await tap(page, '#bigbut', 3)
+  const expected = await goalView(page)
+  const saved = await tallied(page)
+  const context = page.context()
+  await page.close()
+  bee.reply = c => c.method === 'GET' ? 'abort' : null
+  const again = await context.newPage()
+  await again.goto(alice('pages'))
+  await connectionNotice(again)
+  assert.deepEqual(await goalView(again), expected)
+  assert.deepEqual(await tallied(again), saved)
+  await staleGoal(again, 'waiting')
+})
+
+// Replicata: reopen with cached goal data while GETs wait; count, edit, Clear
+// and UNDO, and attempt to press the naturally disabled Submit. Then release
+// the refresh and Submit normally.
+// Expectata: all local actions work, no early POST occurs, and the17 go only
+// after a complete successful refresh makes Submit available.
+// Resultata (before): cached data enabled Submit before its refresh completed.
+qual('cached data never enables Submit before a successful full refresh', async (page, bee) => {
+  await login(page)
+  await tap(page, '#bigbut', 7)
+  const context = page.context()
+  await page.close()
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
+  try {
+    const again = await context.newPage()
+    await again.goto(alice('pushups'))
+    await see(again, '#goals', /pushups/)
+    await staleGoal(again)
+    await again.$eval('#subbut', b => b.click())
+    assert.equal(posts(bee).length, 0)
+    await tap(again, '#bigbut')
+    await see(again, '#num', '8')
+    await type(again, '17')
+    await remark(again, 'while refreshing')
+    await clear(again)
+    await see(again, '#bigbut', '0')
+    await tap(again, '#undobut')
+    await see(again, '#bigbut', '17')
+    await see(again, '#comment', 'while refreshing')
+    assert.ok(await disabled(again, '#subbut'))
+    open()
+    assert.ok(await till(again, async () => !await disabled(again, '#subbut')))
+    await tap(again, '#subbut')
+    await see(again, '#status', /^✓/)
+    assert.deepEqual(values(bee), ['17'])
+  } finally { open() }
+})
+
+// Replicata: a good selected-goal cache is followed by HTTP500 on refresh;
+// close the window and reopen while GETs wait.
+// Expectata: the rejection remains loud and never replaces the good cache.
+// Resultata (clearing/writing cache before a validated full refresh): saved
+// details disappear or are replaced despite the failed refresh.
+qual('a rejected refresh never replaces a good durable goal cache', async (page, bee) => {
+  await login(page)
+  await choose(page, 'pages')
+  const expected = await goalView(page)
+  bee.reply = c => c.method === 'GET' ? [500, { errors: 'Qual: no replacement' }] : null
+  await comeback(page)
+  await see(page, '#status', /^Error: 500/)
+  await expectError(page, bee, /Qual: no replacement/)
+  assert.deepEqual(await goalView(page), expected)
+  const context = page.context()
+  await page.close()
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
+  try {
+    const again = await context.newPage()
+    await again.goto(alice('pages'))
+    await see(again, '#num', '120')
+    assert.deepEqual(await goalView(again), expected)
+    await staleGoal(again)
+  } finally { open() }
+})
+
+// Replicata: a refresh fetches a changed catalogue, but its selected-goal
+// datapoint is malformed. Close and reopen before another refresh succeeds.
+// Expectata: validation fails loudly and the entire prior snapshot survives;
+// no partial new catalogue is accepted as the selected goal's complete cache.
+// Resultata (saving before all validation): partial malformed data replaces it.
+qual('a malformed selected-goal refresh cannot partially overwrite its cache', async (page, bee) => {
+  await login(page)
+  await choose(page, 'pages')
+  const expected = await goalView(page)
+  bee.goals[1].safesum = 'partial refresh must not appear'
+  bee.added.pages = datapoint('broken', { comment: 'invalid replacement' })
+  await comeback(page)
+  await see(page, '#status', /^Error: .*broken/)
+  await expectError(page, bee, /broken/)
+  assert.deepEqual(await goalView(page), expected)
+  const context = page.context()
+  await page.close()
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
+  try {
+    const again = await context.newPage()
+    await again.goto(alice('pages'))
+    await see(again, '#num', '120')
+    assert.deepEqual(await goalView(again), expected)
+    await staleGoal(again)
+  } finally { open() }
+})
+
+// Replicata: an odometer Submit returns123 with its comment; close immediately
+// before the follow-up GET, then reopen while GETs wait.
+// Expectata: the acknowledged datapoint is already in the durable goal cache,
+// so the reading, last datapoint and placeholder show123 and that comment.
+// Resultata (persisting only GET results): the old120 returns on the next launch.
+qual('a successful Submit updates the durable goal cache before the follow-up refresh', async (page, bee) => {
+  await page.clock.install()
+  await login(page)
+  await choose(page, 'pages')
+  await remark(page, 'accepted comment')
+  await tap(page, '#bigbut', 3)
+  await tap(page, '#subbut')
+  await see(page, '#status', /^✓/)
+  await see(page, '#num', '123')
+  const expected = await goalView(page)
+  const context = page.context()
+  await page.close()
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
+  try {
+    const again = await context.newPage()
+    await again.goto(alice('pages'))
+    await see(again, '#num', '123')
+    assert.deepEqual(await goalView(again), expected)
+    assert.equal(await again.getAttribute('#comment', 'placeholder'), 'accepted comment')
+    await staleGoal(again)
+  } finally { open() }
+})
+
+// Replicata: open a named goal under a stored login with no goal cache at all,
+// while Beeminder's first GETs wait.
+// Expectata: its URL identity, visible loading placeholders and a loading
+// notice; the local counter works and Submit waits for current data.
+// Resultata (before): blank identity/goal fields while the network was pending.
+qual('a first named-goal launch shows loading placeholders instead of blank goal details', async (page, bee) => {
+  await page.addInitScript(token => localStorage.setItem('beeminder-token',
+    JSON.stringify({ token, user: 'alice' })), TOKEN)
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'GET' ? shut.then(() => null) : null
+  try {
+    await page.goto(alice('pages'))
+    await see(page, '#goalname', 'alice/pages')
+    await see(page, '#safesum', /\S/)
+    await see(page, '#lastdp', /\S/)
+    await staleGoal(page)
+    await tap(page, '#bigbut', 7)
+    await see(page, '#bigbut', '7')
+    assert.ok(!await page.isVisible('#infinibee'))
+    open()
+    await see(page, '#bigbut', '127')
+    assert.ok(await till(page, async () => !await disabled(page, '#subbut')))
+  } finally { open() }
+})
+
+// Replicata: on pages at120, send3 with the POST reply delayed; return to the
+// page before that reply arrives, then let POST succeed while the queued GET
+// loses its connection. Close and reopen with the connection still unavailable.
+// Expectata: the acknowledged123 is displayed and durably cached throughout.
+// Resultata (restoring goals outside the queue): the Submit updated its old
+// goal object while saving a replacement array that still contained120.
+qual('returning during Submit preserves its acknowledged odometer cache when refresh fails', async (page, bee) => {
+  await page.clock.install()
+  await login(page)
+  await choose(page, 'pages')
+  const [shut, open] = gate()
+  bee.reply = c => c.method === 'POST' ? shut : 'abort'
+  try {
+    await tap(page, '#bigbut', 3)
+    await tap(page, '#subbut')
+    await calls(page, bee, 2 * LOAD + 1)
+    await comeback(page)
+    open(null)
+    assert.ok(await till(page, async () =>
+      await page.getAttribute('#status', 'data-refresh') === 'waiting'))
+    await see(page, '#status', /^✓/)
+    await see(page, '#num', '123')
+    await see(page, '#lastdp', / 123 /)
+    assert.equal((await tallied(page)).count, 0)
+    const context = page.context()
+    await page.close()
+    const again = await context.newPage()
+    await again.goto(alice('pages'))
+    await connectionNotice(again)
+    await see(again, '#num', '123')
+    await see(again, '#lastdp', / 123 /)
+  } finally { open(null) }
+})
+
+// Replicata: queue a second refresh behind a delayed first refresh, then press
+// the enabled Submit as the first finishes; the second refresh loses connection.
+// Expectata: Submit, whose turn follows that failed refresh, sends nothing,
+// refuses visibly and preserves the pending tally.
+// Resultata (checking freshness only when pressed): the queued Submit sends
+// using goal details which the intervening refresh could not confirm.
+qual('a Submit queued behind a failed refresh cannot send stale goal details', async (page, bee) => {
+  await page.clock.install()
+  await login(page)
+  await tap(page, '#bigbut', 3)
+  const [shut, open] = gate()
+  let gets = 0
+  bee.reply = c => c.method !== 'GET' ? null : ++gets <= 2
+    ? shut.then(() => null) : gets === 3 ? null : 'abort'
+  try {
+    await comeback(page)
+    assert.ok(await till(page, () => gets === 2))
+    await comeback(page)
+    await page.evaluate(() => {
+      window.qualSubmitted = false
+      const observer = new MutationObserver(() => {
+        const status = document.getElementById('status')
+        const submit = document.getElementById('subbut')
+        if (status.dataset.refresh === 'current' && !submit.disabled) {
+          observer.disconnect()
+          window.qualSubmitted = true
+          submit.click()
+        }
+      })
+      observer.observe(document.getElementById('status'), { attributes: true })
+    })
+    open()
+    assert.ok(await till(page, () => page.evaluate(() => window.qualSubmitted)),
+              'Submit was genuinely enabled when pressed')
+    assert.ok(await till(page, () => gets >= 5))
+    await settled(page)
+    assert.deepEqual(values(bee), [], 'no POST after the intervening failed refresh')
+    await see(page, '#bigbut', '3')
+    await see(page, '#status', /Error:/)
+    await expectError(page, bee, /Prius renovandae/)
+  } finally { open() }
+})
+
+// Replicata: press Submit while current, then request a refresh in the same
+// browser task, before either queued operation has started; its GETs fail.
+// Expectata: the Submit already ahead of that refresh sends its captured tally.
+// Resultata (checking the latest requested state inside Submit's turn): the
+// later refresh's loading indicator wrongly cancels the earlier Submit.
+qual('a refresh requested after an admitted Submit does not cancel its send', async (page, bee) => {
+  await page.clock.install()
+  await login(page)
+  await tap(page, '#bigbut', 3)
+  bee.reply = c => c.method === 'GET' ? 'abort' : null
+  await page.evaluate(() => {
+    document.getElementById('subbut').click()
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+  assert.ok(await till(page, async () =>
+    await page.getAttribute('#status', 'data-refresh') === 'waiting'))
+  await settled(page)
+  assert.deepEqual(values(bee), ['3'])
+  await see(page, '#status', /^✓/)
+  await see(page, '#bigbut', '0')
 })

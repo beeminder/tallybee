@@ -1,5 +1,7 @@
 import * as beeminder from './beeminder.js';
 import * as journal from './journal.js'
+import * as goalcache from './goals-cache.js'
+const { check: goalscheck, datapoint: dpcheck } = goalcache
 import { reduce, upgrade, add } from './tally.js'
 
 // Convenience functions -------------------------------------------------------
@@ -38,6 +40,18 @@ const redirectUri = location.origin + '/'
 // event's message, "Script error.".)
 window.addEventListener('error', e => fail(e.error ?? e))
 window.addEventListener('unhandledrejection', e => fail(e.reason))
+
+// The saved snapshot and its freshness are separate. A failed refresh never
+// empties known details or replaces a Submit's outcome. Only a complete,
+// validated refresh makes Submit available.
+let message = { kind: '', text: '' }, refreshState = 'idle', notice = ''
+const NOTICES = {
+  idle: '', current: '', error: '',
+  // TODO: Goal details are being refreshed; any displayed details are cached.
+  loading: 'Renovantur propositorum notitiae…',
+  // TODO: Beeminder did not answer; the tally is saved and the refresh will retry.
+  waiting: 'Beeminder non respondet. Numerus servatus est; renovatio iterum temptabitur.',
+}
 
 // One durable pending datapoint per goal, shared by every window. Each input
 // is an immutable journal entry saved synchronously before render acknowledges
@@ -224,30 +238,18 @@ function change(keys, f) {
 // means the device's
 const NOUSER = { username: '', timezone: undefined }
 
-// Throw unless gs is a list of goals, and u a user, as TallyBee needs them from
-// Beeminder (see NOGOAL and NOUSER); else return them, as { goals, user }
-function goalscheck(gs, u) {
-  gs.forEach(({ slug, kyoom, safesum, queued, deadline }) => beeminder.assert(
-    typeof slug === 'string' && typeof kyoom === 'boolean' &&
-    typeof safesum === 'string' && typeof queued === 'boolean' &&
-    Number.isFinite(deadline),
-    JSON.stringify({ slug, kyoom, safesum, queued, deadline })))
-  beeminder.assert(typeof u.username === 'string' && typeof u.timezone === 'string',
-                   JSON.stringify({ username: u.username, timezone: u.timezone }))
-  return { goals: gs, user: u }
+// A complete, validated snapshot is saved for each account and selected
+// goal. The user's catalogue also supplies known details for unvisited goals.
+// Every saved snapshot starts stale on a new visit, regardless of its age.
+let goals = [], user = NOUSER
+// Whether the queued operations have confirmed this snapshot. Requesting a
+// refresh marks the UI stale immediately; this changes only in its turn, so
+// a later refresh cannot invalidate a Submit already ahead of it.
+let confirmed = false
+function restoreGoals() {
+  const saved = goalcache.read(beeminder.getUsername(), slug)
+  ;({ goals, user } = saved ?? { goals: [], user: NOUSER })
 }
-
-// The user's goals, and the user, as they last loaded from Beeminder (see
-// loadGoals). Each tab keeps them, in its sessionStorage, for as long as the
-// same user is logged in, so that a page loading there, as for another goal,
-// shows them from the start, till they load again: an odometer-like goal's
-// reading, say, rather than the count with no goal to build on. Otherwise,
-// till they load, there are none, and the stand-in for the user. (The tab's
-// own sessionStorage, unlike localStorage, sets off no other window: see the
-// storage listener.)
-const kept = JSON.parse(sessionStorage.getItem('tallybee-goals')) ?? { user: NOUSER }
-let { goals, user } = kept.user.username === beeminder.getUsername()
-  ? goalscheck(kept.goals, kept.user) : { goals: [], user: NOUSER }
 
 // The paths of TallyBee's pages: TallyBee's own, /, which names no goal (or
 // /index.html, which GitHub Pages serves index.html at too); and each goal's,
@@ -275,6 +277,7 @@ const owner = u => named.groups.user ?? u.username
 let slug = named.groups.slug ?? new URLSearchParams(location.search).get('goal')
 slug ??= preferences().slug ?? null
 migrate()
+restoreGoals()
 
 // The URL of TallyBee, as a path, for user u's goal s: its user's name and its
 // slug, as on Beeminder's own site, but with a slash at the end (see
@@ -335,14 +338,6 @@ document.head.append(Object.assign(document.createElement('link'),
 // or goal: on Beeminder to take a datapoint, or on another goal's page to load
 let busy = false
 
-// Throw unless d is a datapoint as TallyBee needs one from Beeminder: with a
-// value, a daystamp, and a comment; else return d
-function dpcheck(d) {
-  beeminder.assert(Number.isFinite(d.value) && /^\d{8}$/.test(d.daystamp) &&
-                   typeof d.comment === 'string', JSON.stringify(d))
-  return d
-}
-
 // A datapoint's value is the count plus a base: 0 if goal g is cumulative
 // (kyoom, in Beeminder jargon), otherwise g's current value, since then each
 // datapoint is a new total, like an odometer reading. That's the value of the
@@ -367,7 +362,8 @@ const NOGOAL = { slug: '', kyoom: true, safesum: '', queued: false, deadline: 0,
 // u's (see owner); else NOGOAL
 const goalof = (gs, u) =>
   gs.find(g => g.slug === slug && owner(u) === u.username) ?? NOGOAL
-const goal = () => goalof(goals, user)
+const goal = () => user.username === beeminder.getUsername()
+  ? goalof(goals, user) : NOGOAL
 
 // The daystamp of the day it is now for goal g, as Beeminder counts days: in
 // the user's timezone, with each day ending at g's deadline. (From the date's
@@ -424,6 +420,8 @@ const PLACEHOLDER = $('comment').placeholder
 function render() {
   const g = goal(), t = load(), v = value(g, t)
   const out = !beeminder.getUsername() // whether logged out
+  const stale = refreshState !== 'current'
+  const unknown = g === NOGOAL && !out && stale
   // The big number is the number to send, always: the count, on a goal that
   // sums its datapoints, and on an odometer-like one, the reading
   $('count').textContent = v
@@ -436,13 +434,17 @@ function render() {
   $('num').style.setProperty('--len', $('num').value.length)
   // The top line: the goal's name (see the goal's link, below), and its
   // safesum (none, with no goal)
-  $('safesum').textContent = g.safesum
-  $('safesum').setAttribute('aria-busy', g.queued) // grayed out: out of date
+  // TODO: An ellipsis marks goal details that have never been fetched.
+  $('safesum').textContent = unknown ? '…' : g.safesum
+  for (const id of ['goalname', 'lastdp', 'goals', 'goallink'])
+    $(id).setAttribute('aria-busy', stale)
+  $('safesum').setAttribute('aria-busy', stale || g.queued) // grayed out: out of date
   // The datapoint added to the goal last, as Beeminder's own site shows it:
   // its day of the month, value, and comment, if it has one, like 30 3 "set 1"
   // (or, with none, 29 120)
   const dp = g.last_datapoint
-  $('lastdp').textContent = dp === null ? '' : `${dp.daystamp.slice(6)} ${dp.value}` +
+  // TODO: An ellipsis marks a previous datapoint that is not known yet.
+  $('lastdp').textContent = dp === null ? (unknown ? '…' : '') : `${dp.daystamp.slice(6)} ${dp.value}` +
     (dp.comment === '' ? '' : ` "${dp.comment}"`)
   // As in Beeminder's own form, the comment field shows the last comment, if
   // any (with none, as with no datapoint, it says what it's for)
@@ -450,7 +452,7 @@ function render() {
   $('sigma').hidden = !g.kyoom
   // Logged out, as after Beeminder rejects our token, the goals can still be
   // there, as they last loaded, but nothing can be sent to them
-  $('subbut').disabled = busy || g === NOGOAL || out
+  $('subbut').disabled = busy || g === NOGOAL || out || stale
   // With a tally of 0, there's nothing for Clear to clear
   $('clearbut').disabled = busy || t.count === 0
   $('comment').disabled = $('num').disabled = busy
@@ -474,7 +476,8 @@ function render() {
   // "beeminder.com/USER/GOAL". With no goal, the user's name alone (none,
   // before the goals load), and just beeminder.com, with no link (grayed out:
   // see style.css).
-  if (g === NOGOAL) { $('goalname').textContent = user.username
+  if (g === NOGOAL) { $('goalname').textContent =
+    user.username || [named.groups.user ?? beeminder.getUsername(), slug].filter(Boolean).join('/')
                       $('goallink').textContent = 'beeminder.com'
                       $('goallink').removeAttribute('href') }
   else { $('goalname').textContent = `${user.username}/${g.slug}`
@@ -496,8 +499,21 @@ function render() {
 
 // Show message msg in the status line, styled according to kind: busy, ok, err
 function say(kind, msg) {
-  $('status').dataset.kind = kind
-  $('status').textContent = msg
+  message = { kind, text: msg }
+  showStatus()
+}
+function showStatus() {
+  const kind = message.kind || (notice ? 'busy' : '')
+  if (kind) $('status').dataset.kind = kind
+  else $('status').removeAttribute('data-kind')
+  $('status').dataset.refresh = refreshState
+  $('status').textContent = [message.text, notice].filter(Boolean).join('\n')
+}
+function refreshing(state) {
+  refreshState = state
+  notice = NOTICES[state]
+  showStatus()
+  render()
 }
 
 // Show an error in the status line, and whatever else it changed, like being
@@ -536,7 +552,7 @@ function bump(d) {
 // the unhandledrejection listener).
 const LOCK = `tallybee ${crypto.randomUUID()}`
 function enqueue(f) {
-  navigator.locks.request(LOCK, f)
+  navigator.locks.request(LOCK, f).catch(e => { fail(e); throw e })
 }
 
 // If Beeminder is updating this page's goal (see NOGOAL), load the goals again
@@ -562,6 +578,7 @@ function dropdown() {
 // link to a goal since renamed, or a link to someone else's goal), then, with
 // no goal selected (see NOGOAL), say so.
 async function loadGoals() {
+  const username = beeminder.getUsername()
   const [gs, u] = await Promise.all([beeminder.getGoals(), beeminder.getUser()])
   goalscheck(gs, u)
   const next = slug ?? gs[0]?.slug ?? null
@@ -578,13 +595,16 @@ async function loadGoals() {
   const g = goalof(gs, u)
   if (g !== NOGOAL) g.last_datapoint = await beeminder.getLastAdded(g.slug) ?? null
   if (g.last_datapoint !== null) dpcheck(g.last_datapoint)
+  // TODO: The login changed while these goal details were loading.
+  beeminder.assert(u.username === username && beeminder.getUsername() === username,
+                   'Mutata est ratio dum notitiae legebantur')
+  goalcache.save({ goals: gs, user: u }, slug)
   // Everything's here now, so show it all at once. The goals that first
   // bring the page's goal set its today (see today).
   const unknown = goal() === NOGOAL
   goals = gs
   user = u
   if (unknown) today = daystamp(goal())
-  sessionStorage.setItem('tallybee-goals', JSON.stringify({ goals, user }))
   dropdown()
   history.replaceState(null, '', goalurl(owner(user), slug))
   $('manifest').href = manifest()
@@ -629,6 +649,8 @@ function submit() {
   render()
   enqueue(async () => {
     try {
+      // TODO: Goal details must be refreshed before a datapoint can be submitted.
+      beeminder.assert(confirmed, 'Prius renovandae sunt propositorum notitiae')
       await navigator.locks.request(`tallybee-send ${slug}`, { ifAvailable: true }, async lock => {
       // TODO: Another window is already submitting this goal's tally.
       beeminder.assert(lock !== null, 'Numerus iam mittitur')
@@ -650,6 +672,7 @@ function submit() {
         })
       g.last_datapoint = dpcheck(dp)
       g.queued = true // as Beeminder has it now, till the goals load again
+      goalcache.save({ goals, user }, slug)
       update({ type: 'accepted', requestid, n })
       // status line once Beeminder has the datapoint, with its value and
       // goal (Beedroid says "Submission successful!")
@@ -760,6 +783,7 @@ $('subbut').addEventListener('click', submit)
 // keyboard's focus, which it had if pressed from the keyboard, to the big
 // button, as when a control gets grayed out (see render)
 $('dismiss').addEventListener('click', () => {
+  notice = ''
   say('', '')
   $('bigbut').focus()
 })
@@ -815,7 +839,33 @@ sent.addEventListener('message', refresh)
 // back to TallyBee, to refresh things like their safesums, and when the
 // connection comes back, as after TallyBee opened with none (see sw.js)
 function refresh() {
-  if (beeminder.getUsername()) enqueue(loadGoals)
+  clearTimeout(polltimer)
+  refreshing(beeminder.getUsername() ? 'loading' : 'idle')
+  enqueue(async () => {
+    // A newer queued refresh also cancels any retry scheduled by its predecessor.
+    clearTimeout(polltimer)
+    try {
+      confirmed = false
+      // Snapshot replacement shares Submit's turn, so a return cannot detach
+      // the goal object whose acknowledged datapoint Submit is about to save.
+      restoreGoals()
+      dropdown()
+      refreshing(beeminder.getUsername() ? 'loading' : 'idle')
+      if (!beeminder.getUsername()) return
+      await loadGoals()
+      confirmed = true
+      refreshing('current')
+    } catch (e) {
+      if (!(e instanceof beeminder.ConnectionError)) {
+        refreshing('error')
+        throw e
+      }
+      refreshing('waiting')
+      // The same timer serves polling and retries; online/return events try sooner.
+      clearTimeout(polltimer)
+      polltimer = setTimeout(refresh, 30000)
+    }
+  })
 }
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) refresh()

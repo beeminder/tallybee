@@ -35,14 +35,26 @@ function getToken() {
   return tokenObj.token;
 }
 
+// A connection failure is recognized only at an I/O boundary. HTTP errors,
+// malformed JSON and exceptions in app logic retain their original errors.
+class ConnectionError extends Error {}
+function connected(promise, signal) {
+  return promise.catch(cause => {
+    if (!(cause instanceof TypeError) && cause.name !== 'TimeoutError' &&
+        !(cause.name === 'AbortError' && signal?.reason?.name === 'TimeoutError'))
+      throw cause;
+    throw new ConnectionError(cause.message, { cause });
+  });
+}
+
 // Parse Beeminder's JSON response to an API call made with access token token,
 // or throw an error saying what went wrong. A 401 means Beeminder rejected the
 // token, so we forget it.
-async function check(response, token) {
+async function check(response, token, signal) {
   if (response.status === 401) { logout(token); throw new Error(REAUTH) }
   if (!response.ok)
     throw new Error(`${response.status} ${await response.text()}`);
-  return response.json();
+  return connected(response.json(), signal);
 }
 
 // Forget access token token, if it's the one we have: a login since the call
@@ -112,9 +124,10 @@ function autoLogin(cleanUrl) {
 // is Beeminder's stand-in for the token's user.)
 async function get(path, params = {}) {
   const token = getToken();
-  return check(await fetch(`${API}${path}?` +
+  const signal = AbortSignal.timeout(PATIENCE);
+  return check(await connected(fetch(`${API}${path}?` +
     new URLSearchParams({ access_token: token, ...params }),
-    { signal: AbortSignal.timeout(PATIENCE) }), token);
+    { signal }), signal), token, signal);
 }
 
 // The user's goals, most urgent first, as a list of Beeminder goal objects.
@@ -161,6 +174,7 @@ async function addDatapoint(goal, value, daystamp, comment, requestid) {
 }
 
 export {
+  ConnectionError,
   REAUTH,
   UNASKED,
   assert,

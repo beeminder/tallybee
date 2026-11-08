@@ -236,7 +236,9 @@ body {
   user-select: none;
 }
 #goalname { color: var(--text); }
-#safesum[aria-busy=true] { opacity: var(--grayed); }
+:is(#goalname, #safesum, #lastdp, #goals, #goallink)[aria-busy=true] {
+  opacity: var(--grayed);
+}
 
 /* The footer: a status line, empty at first, over rows of controls, on
    a 4px grid: 16px margins, 12px between rows, 8px between neighbors, and

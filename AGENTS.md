@@ -41,6 +41,20 @@ I'm tentatively retiring the following rules that seem unncessary for Fable and 
 
 # Agent Scratchpad (human edits only above this line)
 
+## Goal details and connection state (2026-11-07)
+
+User-approved spec: "yeah, not allowing submit when stale sounds safest and cleanest, right?"
+
+One validated snapshot supplies the displayed goal details. It persists across launches, separately for each account and selected goal. Refreshing retains those details, grays them out, and disables Submit until a complete refresh succeeds. A first visit shows the known URL identity and explicit unknown-detail placeholders. Local tally operations remain available. A successful Submit saves its acknowledged datapoint in the snapshot before consuming the pending tally; snapshot replacement and Submit share the same queue.
+
+Freshness is explicit: idle, loading, waiting, current, or error. Connection failures at fetch/body I/O boundaries enter waiting and retry after 30 seconds; returning or an online event can retry sooner. HTTP failures, malformed JSON/data, storage failures and programming errors remain loud. A failed Submit remains loud and is never retried automatically. Refresh notices cannot overwrite a Submit's outcome. New UI copy remains Latin pending human wording.
+
+The UI marks details stale as soon as a refresh is requested. The queued snapshot also records whether it has been confirmed: a refresh clears that flag when its turn starts, and sets it only on success. Submit asserts it at its send turn. Thus a failed preceding refresh blocks a send, while a later queued refresh cannot cancel an already admitted send. Both queue orders have quals; no extra conditional branch is needed.
+
+Anti-magic branch audit: `beeminder.js` adds one condition classifying transport failures at the I/O boundary. `goals-cache.js` has three conditions: validate a selected non-null datapoint; read a present durable record; accept only a matching legacy session record. A malformed present record throws instead of trying another source. `script.js` adds one refresh-error classification condition and one status-kind presence condition; its existing logged-in refresh condition moves inside the queue. Render uses freshness for grayness/Submit, and unknownness for placeholders. Its goal lookup checks the current account. There are no retry counts, cache-age guesses, offline guesses, or special rules for odometer goals.
+
+Research: [Android's offline-first guidance](https://developer.android.com/topic/architecture/data-layer/offline-first) recommends immediately readable persistent local data; [Google's offline UX guidance](https://web.dev/articles/offline-ux-design-guidelines) recommends retaining useful cached content and explaining connectivity and unavailable actions. These support explicit snapshot/freshness state; they do not justify silently accepting malformed data.
+
 ## Tally persistence quals (2026-11-07)
 
 User: "trying to preserve separate window counts was probably misguided. that was claude's idea and i failed to think it through when okaying it"
