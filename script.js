@@ -47,10 +47,10 @@ window.addEventListener('unhandledrejection', e => fail(e.reason))
 let message = { kind: '', text: '' }, refreshState = 'idle', notice = ''
 const NOTICES = {
   idle: '', current: '', error: '',
-  // TODO: Goal details are being refreshed; any displayed details are cached.
-  loading: 'Renovantur propositorum notitiae…',
-  // TODO: Beeminder did not answer; the tally is saved and the refresh will retry.
-  waiting: 'Beeminder non respondet. Numerus servatus est; renovatio iterum temptabitur.',
+  // Goal details are being refreshed; any displayed details are cached.
+  loading: 'Loading…',
+  // Beeminder did not answer; the tally is saved and the refresh will retry.
+  waiting: 'Waiting for Beeminder to respond…',
 }
 
 // One durable pending datapoint per goal, shared by every window. Each input
@@ -97,9 +97,9 @@ function initial() {
     const name = key.slice('tallybee '.length)
     const s = name === 'null' ? null : name
     const t = legacy(legacyRecords[key], s), previous = tallies[keyfor(s)]
-    // TODO: Conflicting older saved tallies were both preserved.
+    // Conflicting older saved tallies were both preserved.
     beeminder.assert(!previous || empty(previous) || same(previous, t),
-                     `Numeri servati discrepant: ${s}`)
+                     `Tally discrepancy: ${s}`)
     tallies[keyfor(s)] = t
   }
   return { tallies, legacy: legacyRecords, conflicts: [] }
@@ -140,8 +140,8 @@ function reduceGoals(book, event, id) {
 }
 function book() {
   const b = bookcheck(journal.read(STATE, initial, reduceGoals))
-  // TODO: Conflicting pending tallies are preserved and require explicit resolution.
-  beeminder.assert(b.conflicts.length === 0, 'Numeri servati discrepant')
+  // Conflicting pending tallies are preserved and require explicit resolution.
+  beeminder.assert(b.conflicts.length === 0, 'Tally discrepancy needs resolved')
   return b
 }
 export function load() {
@@ -171,8 +171,8 @@ function checkLegacy() {
     archive(JSON.stringify({ key: k, previous: previous[k], current: current[k] }))
     if (current[k] !== undefined) archive(current[k])
   }
-  // TODO: An older TallyBee window changed saved data; all copies were preserved.
-  beeminder.assert(changed.length === 0, 'Altera versio numeros mutavit')
+  // An older TallyBee window changed saved data; all copies were preserved.
+  beeminder.assert(changed.length === 0, 'Another TallyBee changed the tally')
 }
 
 // Preserve the old window's private state before retiring sessionStorage.
@@ -188,8 +188,8 @@ function migrate() {
     const t = legacy(raw, s)
     if (!empty(t)) {
       const durable = save({ type: 'import', state: t }, s).tallies[keyfor(s)]
-      // TODO: Two different pending tallies were preserved; resolve their conflict.
-      beeminder.assert(same(durable, t), `Numeri discrepant: ${s}; ${t.count}`)
+      // Two different pending tallies were preserved; resolve their conflict.
+      beeminder.assert(same(durable, t), `Tally discrepancy: ${s}; ${t.count}`)
     }
     sessionStorage.removeItem('tallybee')
   }
@@ -434,7 +434,7 @@ function render() {
   $('num').style.setProperty('--len', $('num').value.length)
   // The top line: the goal's name (see the goal's link, below), and its
   // safesum (none, with no goal)
-  // TODO: An ellipsis marks goal details that have never been fetched.
+  // An ellipsis marks goal details that have never been fetched.
   $('safesum').textContent = unknown ? '…' : g.safesum
   for (const id of ['goalname', 'lastdp', 'goals', 'goallink'])
     $(id).setAttribute('aria-busy', stale)
@@ -443,7 +443,7 @@ function render() {
   // its day of the month, value, and comment, if it has one, like 30 3 "set 1"
   // (or, with none, 29 120)
   const dp = g.last_datapoint
-  // TODO: An ellipsis marks a previous datapoint that is not known yet.
+  // An ellipsis marks a previous datapoint that is not known yet.
   $('lastdp').textContent = dp === null ? (unknown ? '…' : '') : `${dp.daystamp.slice(6)} ${dp.value}` +
     (dp.comment === '' ? '' : ` "${dp.comment}"`)
   // As in Beeminder's own form, the comment field shows the last comment, if
@@ -584,9 +584,9 @@ async function loadGoals() {
   const next = slug ?? gs[0]?.slug ?? null
   if (next !== slug) {
     const saved = save({ type: 'assign' }, next)
-    // TODO: A tally already exists for the first goal; both tallies were preserved.
+    // A tally already exists for the first goal; both tallies were preserved.
     beeminder.assert(!saved.tallies.null || empty(saved.tallies.null),
-                     `Iam numerus servatus est: ${next}`)
+                     `Previous tally exists: ${next}`)
   }
   slug = next
   // The goal's last datapoint, for the base of an odometer-like goal (see
@@ -595,9 +595,9 @@ async function loadGoals() {
   const g = goalof(gs, u)
   if (g !== NOGOAL) g.last_datapoint = await beeminder.getLastAdded(g.slug) ?? null
   if (g.last_datapoint !== null) dpcheck(g.last_datapoint)
-  // TODO: The login changed while these goal details were loading.
+  // The login changed while these goal details were loading.
   beeminder.assert(u.username === username && beeminder.getUsername() === username,
-                   'Mutata est ratio dum notitiae legebantur')
+                   'Oops, login changed while loading goal details')
   goalcache.save({ goals: gs, user: u }, slug)
   // Everything's here now, so show it all at once. The goals that first
   // bring the page's goal set its today (see today).
@@ -649,13 +649,15 @@ function submit() {
   render()
   enqueue(async () => {
     try {
-      // TODO: Goal details must be refreshed before a datapoint can be submitted.
-      beeminder.assert(confirmed, 'Prius renovandae sunt propositorum notitiae')
+      // Goal details must be refreshed before a datapoint can be submitted.
+      beeminder.assert(confirmed, 'Refresh goal details before submitting')
       await navigator.locks.request(`tallybee-send ${slug}`, { ifAvailable: true }, async lock => {
-      // TODO: Another window is already submitting this goal's tally.
-      beeminder.assert(lock !== null, 'Numerus iam mittitur')
-      // TODO: The pending tally changed before this submission could begin.
-      beeminder.assert(load().requestid === requestid, 'Numerus mutatus est')
+      // Another window is already submitting this goal's tally.
+      beeminder.assert(lock !== null, 
+        'Another TallyBee submission in progress')
+      // The pending tally changed before this submission could begin.
+      beeminder.assert(load().requestid === requestid, 
+        'Tally changed before submission')
       const g = goal()
       beeminder.assert(g !== NOGOAL, JSON.stringify({ slug }))
       const { pin } = load() // as it was before this send
